@@ -2,7 +2,7 @@
 <html lang="sv">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -42,20 +42,19 @@
 
   /* ---- Pilknappar för mobil ---- */
   html, body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
-  .dpad { display:none; margin-top:10px; grid-template-columns:repeat(3, 72px); grid-template-rows:repeat(3, 72px);
-          gap:6px; touch-action:none; }
-  body.touch .dpad { display:grid; }
+  .stats, .btns { display:contents; }
+  .pad { display:none; touch-action:none; gap:8px; }
   body.touch .help { display:none; }
-  .dbtn { background:var(--green); border:3px solid #fff; color:#fff; font-size:30px; font-weight:bold;
-          display:flex; align-items:center; justify-content:center; box-shadow:4px 4px 0 #000;
-          touch-action:none; -webkit-tap-highlight-color:transparent; }
+  .dbtn { background:var(--green); border:3px solid #fff; color:#fff; font-size:34px; font-weight:bold;
+          display:flex; align-items:center; justify-content:center; box-shadow:4px 4px 0 #000; flex:1;
+          touch-action:none; -webkit-tap-highlight-color:transparent; border-radius:10px; }
   .dbtn.on { background:#ffd54a; color:var(--dark); transform:translate(2px,2px); box-shadow:2px 2px 0 #000; }
-  .dpad .up { grid-column:2; grid-row:1; }
-  .dpad .left { grid-column:1; grid-row:2; }
-  .dpad .center { grid-column:2; grid-row:2; background:var(--dark); border:3px solid var(--green);
-                  display:flex; align-items:center; justify-content:center; font-size:12px; color:#a8e6bf; }
-  .dpad .right { grid-column:3; grid-row:2; }
-  .dpad .down { grid-column:2; grid-row:3; }
+  .padL { flex-direction:column; }   /* upp + ner */
+  .padR { flex-direction:row; }      /* vänster + höger */
+
+  /* stående / liten skärm: pilarna under spelplanen */
+  body.touch .controls { display:flex; justify-content:space-between; width:min(960px,96vw); margin-top:10px; }
+  body.touch .pad { display:flex; width:44%; height:160px; }
 
   @media (max-width:600px) {
     body { padding:8px; }
@@ -63,7 +62,6 @@
     .hud { gap:5px; margin-bottom:8px; }
     .box { min-width:0; flex:1 1 22%; padding:4px 6px; font-size:14px; }
     .box small { font-size:9px; }
-    #restartBtn { flex:1 1 100%; padding:6px; font-size:14px; }
     .overlay { padding:10px; gap:6px; }
     .overlay h2 { font-size:18px; }
     .overlay p { font-size:12px; }
@@ -73,23 +71,30 @@
     #carry { font-size:13px; text-align:center; }
   }
 
-  /* ---- Mobil i liggande läge: spelplan till vänster, poäng + pilar till höger ---- */
+  /* ---- Mobil i liggande läge: upp/ner till vänster, spelplan i mitten, vänster/höger till höger ---- */
   @media (orientation: landscape) {
-    body.touch { display:grid; grid-template-columns:auto 176px; grid-template-rows:auto 1fr;
-                 grid-template-areas:"game hud" "game pad"; gap:6px 10px; padding:6px;
+    body.touch { --side:clamp(104px, 15vw, 128px); display:grid; grid-template-columns:var(--side) auto var(--side); grid-template-rows:auto 1fr;
+                 grid-template-areas:"stats game btns" "padL game padR"; gap:6px 12px;
+                 padding:6px max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
                  height:100vh; height:100dvh; overflow:hidden; overscroll-behavior:none;
-                 align-content:center; justify-content:center; }
+                 align-content:stretch; align-items:stretch; justify-content:center; }
     body.touch h1, body.touch #carry, body.touch .help { display:none; }
+    body.touch .hud, body.touch .controls { display:contents; }
     body.touch .wrap { grid-area:game; align-self:center;
-                       width:min(calc((100vh - 20px) * 20 / 14), calc(100vw - 206px));
-                       width:min(calc((100dvh - 20px) * 20 / 14), calc(100vw - 206px)); }
-    body.touch .hud { grid-area:hud; display:grid; grid-template-columns:1fr 1fr; gap:4px; width:100%; margin:0; }
-    body.touch .box { min-width:0; padding:3px 4px; font-size:13px; border-width:2px; }
+      --availW: calc(100vw - 2 * var(--side) - 24px - env(safe-area-inset-left) - env(safe-area-inset-right));
+      --availH: calc(100vh - 14px - env(safe-area-inset-bottom));
+      width:min(calc(var(--availH) * 20 / 14), var(--availW)); }
+    @supports (height: 100dvh) {
+      body.touch .wrap { --availH: calc(100dvh - 14px - env(safe-area-inset-bottom)); }
+    }
+    body.touch .stats { grid-area:stats; display:grid; grid-template-columns:1fr 1fr; gap:4px; }
+    body.touch .btns { grid-area:btns; display:flex; flex-direction:column; gap:5px; }
+    body.touch .box { min-width:0; padding:3px 2px; font-size:13px; border-width:2px; }
     body.touch .box small { font-size:8px; }
-    body.touch .hud button { padding:4px; font-size:12px; box-shadow:2px 2px 0 #000; border-width:2px; }
-    body.touch .dpad { grid-area:pad; margin:0; align-self:center; justify-self:center;
-                       grid-template-columns:repeat(3, 54px); grid-template-rows:repeat(3, 54px); gap:5px; }
-    body.touch .dbtn { font-size:24px; }
+    body.touch .btns button { padding:5px 2px; font-size:12px; box-shadow:2px 2px 0 #000; border-width:2px; }
+    body.touch .pad { width:auto; height:auto; min-height:0; }
+    body.touch .padL { grid-area:padL; }
+    body.touch .padR { grid-area:padR; }
     body.touch canvas { border-width:3px; }
     body.touch .overlay { inset:3px; padding:8px; gap:5px; }
     body.touch .overlay h2 { font-size:17px; }
@@ -97,6 +102,14 @@
     body.touch .overlay button { font-size:13px; padding:5px 12px; }
     body.touch .big { font-size:28px; }
     body.touch .newhs { font-size:14px; }
+  }
+
+  @media (orientation: landscape) {
+    body.touch.nofs .btns { display:grid; grid-template-columns:1fr 1fr; gap:4px; align-content:start; }
+    body.touch.nofs .btns button { grid-column:1 / -1; }
+    body.touch.nofs .stats { grid-template-columns:1fr; }
+    body.touch.nofs .stats .box { display:flex; justify-content:space-between; align-items:center; padding:3px 8px; font-size:15px; }
+    body.touch.nofs .stats .box small { font-size:9px; }
   }
 
   /* ---- Mobil i stående läge: be spelaren vrida mobilen ---- */
@@ -118,12 +131,16 @@
   <h1>FAJRS <span>BUTIKSRUSCH</span></h1>
 
   <div class="hud">
+    <div class="stats">
     <div class="box"><small>POÄNG</small><span id="score">0</span></div>
     <div class="box timer" id="timerBox"><small>TID</small><span id="time">60</span></div>
     <div class="box"><small>STREAK</small><span id="streak">0</span> <span id="mult">x1</span></div>
     <div class="box"><small>HIGHSCORE</small><span id="hs">0</span></div>
+    </div>
+    <div class="btns">
     <button id="restartBtn">↻ Omstart</button>
     <button id="fsBtn">⛶ Helskärm</button>
+    </div>
   </div>
 
   <div class="wrap">
@@ -152,12 +169,15 @@
   <div id="carry"></div>
   <div class="help">Piltangenter = gå · Enter = kör igen</div>
 
-  <div class="dpad" id="dpad">
-    <div class="dbtn up" data-key="ArrowUp">▲</div>
-    <div class="dbtn left" data-key="ArrowLeft">◀</div>
-    <div class="center">FAJR</div>
-    <div class="dbtn right" data-key="ArrowRight">▶</div>
-    <div class="dbtn down" data-key="ArrowDown">▼</div>
+  <div class="controls">
+    <div class="pad padL">
+      <div class="dbtn up" data-key="ArrowUp">▲</div>
+      <div class="dbtn down" data-key="ArrowDown">▼</div>
+    </div>
+    <div class="pad padR">
+      <div class="dbtn left" data-key="ArrowLeft">◀</div>
+      <div class="dbtn right" data-key="ArrowRight">▶</div>
+    </div>
   </div>
 
   <div class="rotate">
@@ -169,9 +189,10 @@
   <div class="tip hidden" id="fsTip">
     <div>
       <b>Helskärm på iPhone</b><br>
-      Safari på iPhone tillåter inte helskärm direkt på en sida. Gör så här istället:<br>
-      tryck på <b>Dela</b>-knappen → <b>Lägg till på hemskärmen</b>.<br>
-      Öppna sen spelet från ikonen på hemskärmen – då fyller det hela skärmen.
+      Safari tillåter inte helskärm med en knapp. Bästa sättet:<br>
+      1. Tryck på <b>Dela</b> (rutan med pilen) → <b>Lägg till på hemskärmen</b>.<br>
+      2. Öppna spelet från den nya ikonen – då syns inga Safari-fält alls.<br><br>
+      Snabbvariant: tryck på <b>aA</b> eller <b>⋯</b> vid adressfältet och välj <b>Dölj verktygsfält</b>.
       <br><button id="tipClose">OK</button>
     </div>
   </div>
@@ -297,7 +318,7 @@
   if (isTouch) document.body.classList.add('touch');
   window.addEventListener('touchstart', () => document.body.classList.add('touch'), { once: true, passive: true });
 
-  const dpad = $('dpad');
+  const pads = document.querySelectorAll('.pad');
   const fingers = new Map(); // pointerId -> tangent som fingret håller
   function setFinger(id, key) {
     const old = fingers.get(id);
@@ -309,24 +330,30 @@
       held.push(key);
       if (state === 'start') startGame();
     } else fingers.delete(id);
-    dpad.querySelectorAll('.dbtn').forEach(b =>
-      b.classList.toggle('on', [...fingers.values()].includes(b.dataset.key)));
+    const active = [...fingers.values()];
+    document.querySelectorAll('.dbtn').forEach(b => b.classList.toggle('on', active.includes(b.dataset.key)));
   }
   function keyAt(x, y) {
     const el = document.elementFromPoint(x, y);
     return el && el.dataset && el.dataset.key ? el.dataset.key : null;
   }
-  dpad.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    try { dpad.setPointerCapture(e.pointerId); } catch (err) {}
-    setFinger(e.pointerId, keyAt(e.clientX, e.clientY));
+  pads.forEach(pad => {
+    pad.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      try { pad.setPointerCapture(e.pointerId); } catch (err) {}
+      setFinger(e.pointerId, keyAt(e.clientX, e.clientY));
+    });
+    pad.addEventListener('pointermove', e => {
+      if (fingers.has(e.pointerId)) {
+        // Fingret får glida utanför knappen – vi behåller riktningen tills det hamnar på en annan pil
+        const k = keyAt(e.clientX, e.clientY);
+        if (k) setFinger(e.pointerId, k);
+      }
+    });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
+      pad.addEventListener(ev, e => setFinger(e.pointerId, null)));
+    pad.addEventListener('contextmenu', e => e.preventDefault());
   });
-  dpad.addEventListener('pointermove', e => {
-    if (fingers.has(e.pointerId) || e.buttons) setFinger(e.pointerId, keyAt(e.clientX, e.clientY));
-  });
-  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
-    dpad.addEventListener(ev, e => setFinger(e.pointerId, null)));
-  dpad.addEventListener('contextmenu', e => e.preventDefault());
 
   // ---------- Uppdatering ----------
   function updatePlayer(dt) {
@@ -670,6 +697,16 @@
   function updateFsButtons() {
     const on = !!fsElement();
     $('fsBtn').textContent = on ? '⛶ Avsluta helskärm' : '⛶ Helskärm';
+  }
+  const canFullscreen = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  if (!canFullscreen) {           // iPhone: Safari tillåter inte helskärm, så vi döljer knapparna
+    $('fsBtn').style.display = 'none';
+    $('fsBtn2').style.display = 'none';
+    document.body.classList.add('nofs');
+    // flytta streak + highscore till högerkolumnen så det blir jämnt på båda sidor
+    const btns = document.querySelector('.btns');
+    btns.insertBefore($('streak').parentNode, $('restartBtn'));
+    btns.insertBefore($('hs').parentNode, $('restartBtn'));
   }
   $('fsBtn').addEventListener('click', toggleFullscreen);
   $('fsBtn2').addEventListener('click', toggleFullscreen);
