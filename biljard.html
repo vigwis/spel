@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biljard 8-ball</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:#09140d;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#fff}
+  body{display:flex;align-items:center;justify-content:center;min-height:100vh}
+  #wrap{position:relative;width:min(100vw,1000px,calc(100vh * 1000 / 640))}
+  canvas{display:block;width:100%;height:auto;touch-action:none;cursor:crosshair;user-select:none;-webkit-user-select:none}
+  #overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(4,14,9,.72)}
+  #overlay.hide{display:none}
+  #panel{background:#102a1b;border:2px solid #2e6b46;border-radius:18px;padding:22px 28px;max-width:600px;width:92%;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  #panel h1{margin:0 0 6px;font-size:clamp(24px,4.5vw,38px)}
+  #panel h2{margin:12px 0 2px;font-size:clamp(20px,3.5vw,30px);color:#ffd84a}
+  #panel p{margin:6px 0;color:#cfe5d6;font-size:clamp(12px,1.9vw,16px);line-height:1.45}
+  .btns{display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap}
+  button{font:inherit;font-weight:700;font-size:clamp(14px,2.2vw,18px);padding:10px 24px;border-radius:12px;border:0;cursor:pointer;color:#fff;transition:transform .1s}
+  button:hover{transform:scale(1.06)}
+  .easy{background:#2e9e5b}.medium{background:#d89b1a}.hard{background:#c8372d}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="1000" height="640"></canvas>
+  <div id="overlay">
+    <div id="panel">
+      <h1 id="ttl">Biljard 🎱</h1>
+      <p id="sub"></p>
+      <h2 id="again" style="display:none">Play again</h2>
+      <p>Välj motståndare:</p>
+      <div class="btns">
+        <button class="easy" data-d="easy">Enkel</button>
+        <button class="medium" data-d="medium">Medel</button>
+        <button class="hard" data-d="hard">Svår</button>
+      </div>
+      <p id="rules" style="margin-top:16px;font-size:clamp(11px,1.6vw,14px)">
+        <b>Så spelar du:</b> Sikta med musen. Håll ner knappen och dra bakåt för att få kraft, släpp för att skjuta.
+        Första färgen du får i bestämmer vilken färg du är. Sätt alla dina bollar och sedan den svarta för att vinna.
+        Hamnar vita bollen i ett hål får motståndaren boll i hand.
+        <b>Spinn:</b> klicka på den vita bollen längst upp så zoomas den in. Dra den röda pricken (upp = framåtspinn, ner = bakåtspinn, sidorna = sidospinn) och klicka på Klar.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const overlay = document.getElementById('overlay');
+const elTtl = document.getElementById('ttl'), elSub = document.getElementById('sub');
+const elAgain = document.getElementById('again'), elRules = document.getElementById('rules');
+
+// ---------- Konstanter ----------
+const W = 1000, H = 640;
+const R = 11;                                   // bollens radie
+const FE = { x1: 90, y1: 160, x2: 910, y2: 530 }; // grönt tyg (där bollarna rullar)
+const CX = (FE.x1 + FE.x2) / 2, CY = (FE.y1 + FE.y2) / 2;
+const POCKETS = [
+  { x: FE.x1, y: FE.y1, r: 26, hx: 73, hy: 143, hr: 24 }, { x: CX, y: FE.y1, r: 24, hx: 500, hy: 146, hr: 22 }, { x: FE.x2, y: FE.y1, r: 26, hx: 927, hy: 143, hr: 24 },
+  { x: FE.x1, y: FE.y2, r: 26, hx: 73, hy: 547, hr: 24 }, { x: CX, y: FE.y2, r: 24, hx: 500, hy: 544, hr: 22 }, { x: FE.x2, y: FE.y2, r: 26, hx: 927, hy: 547, hr: 24 }
+];
+const FRIC_K = 0.16, FRIC_A = 120;              // friktion
+const E_WALL = 0.78, E_BALL = 0.97;             // studs
+const DT = 1 / 240, VMAX = 1500, MAXPULL = 170;
+const FOOT_X = FE.x1 + (FE.x2 - FE.x1) * 0.70;
+const RACK_DX = Math.sqrt(3) * (R + 0.3);
+const DIFFN = { easy: 'Enkel', medium: 'Medel', hard: 'Svår' };
+const GN = { yellow: 'gul', red: 'röd' };
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rand = (a, b) => a + Math.random() * (b - a);
+const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+const normAng = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+
+// ---------- Bakgrund: skog + bord (ritas en gång) ----------
+const bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+function rr(g, x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+function drawForest(g) {
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#16314a'); sky.addColorStop(0.4, '#2c5a5e'); sky.addColorStop(1, '#0f2a18');
+  g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  const glow = g.createRadialGradient(780, 120, 10, 780, 120, 260);
+  glow.addColorStop(0, 'rgba(255,240,190,.45)'); glow.addColorStop(1, 'rgba(255,240,190,0)');
+  g.fillStyle = glow; g.fillRect(0, 0, W, 400);
+  let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const layers = [
+    { y: 230, h: [70, 110], c: '#1b4a35', n: 30 },
+    { y: 290, h: [90, 140], c: '#123a24', n: 22 },
+    { y: 440, h: [130, 190], c: '#0b2a18', n: 16 },
+    { y: 660, h: [200, 290], c: '#061a0d', n: 12 }
+  ];
+  for (const L of layers) {
+    for (let i = 0; i < L.n; i++) {
+      const x = (i + rnd() * 0.8) * (W / L.n), by = L.y + rnd() * 30, h = L.h[0] + rnd() * (L.h[1] - L.h[0]), w = h * 0.5;
+      g.fillStyle = '#2a1a0c'; g.fillRect(x - w * 0.06, by - h * 0.12, w * 0.12, h * 0.14);
+      g.fillStyle = L.c;
+      for (let k = 0; k < 4; k++) {
+        const ty = by - h * 0.12 - h * 0.22 * k, tw = w * (1 - k * 0.2) / 2 + w * 0.1;
+        g.beginPath(); g.moveTo(x, ty - h * 0.42); g.lineTo(x + tw, ty); g.lineTo(x - tw, ty); g.closePath(); g.fill();
+      }
+    }
+    const fog = g.createLinearGradient(0, L.y - 40, 0, L.y + 80);
+    fog.addColorStop(0, 'rgba(120,170,160,0)'); fog.addColorStop(1, 'rgba(120,170,160,.10)');
+    g.fillStyle = fog; g.fillRect(0, L.y - 40, W, 120);
+  }
+}
+function drawTable(g) {
+  let seed = 5; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  // skugga på marken
+  g.save(); g.shadowColor = 'rgba(0,0,0,.65)'; g.shadowBlur = 40; g.shadowOffsetY = 20;
+  g.fillStyle = '#4d2c12'; rr(g, 50, 120, 900, 450, 24); g.fill(); g.restore();
+  // träramen
+  const wg = g.createLinearGradient(0, 120, 0, 570);
+  wg.addColorStop(0, '#8a5530'); wg.addColorStop(0.5, '#5e3519'); wg.addColorStop(1, '#3d220e');
+  g.fillStyle = wg; rr(g, 50, 120, 900, 450, 24); g.fill();
+  // ådring
+  g.save(); rr(g, 50, 120, 900, 450, 24); g.clip();
+  g.save(); g.beginPath(); g.rect(50, 120, 900, 22); g.rect(50, 548, 900, 22); g.clip();
+  for (let i = 0; i < 220; i++) {
+    const x = rnd() * 900 + 20, y = (rnd() < 0.5 ? 120 : 548) + rnd() * 22, l = 60 + rnd() * 260;
+    g.strokeStyle = rnd() < 0.7 ? 'rgba(30,12,2,' + (0.08 + rnd() * 0.14) + ')' : 'rgba(255,200,140,' + (0.04 + rnd() * 0.06) + ')';
+    g.lineWidth = 0.5 + rnd() * 1.3; g.beginPath(); g.moveTo(x, y); g.bezierCurveTo(x + l / 3, y + rnd() * 3 - 1.5, x + 2 * l / 3, y + rnd() * 3 - 1.5, x + l, y + rnd() * 2 - 1); g.stroke();
+  }
+  g.restore();
+  g.save(); g.beginPath(); g.rect(50, 120, 22, 450); g.rect(928, 120, 22, 450); g.clip();
+  for (let i = 0; i < 80; i++) {
+    const x = (rnd() < 0.5 ? 50 : 928) + rnd() * 22, y = rnd() * 450 + 100, l = 40 + rnd() * 200;
+    g.strokeStyle = rnd() < 0.7 ? 'rgba(30,12,2,' + (0.08 + rnd() * 0.14) + ')' : 'rgba(255,200,140,' + (0.04 + rnd() * 0.06) + ')';
+    g.lineWidth = 0.5 + rnd() * 1.3; g.beginPath(); g.moveTo(x, y); g.lineTo(x + rnd() * 2 - 1, y + l); g.stroke();
+  }
+  g.restore(); g.restore();
+  // kanter (ljus uppe till vänster, mörk nere till höger)
+  g.lineWidth = 2; g.strokeStyle = 'rgba(255,225,170,.35)'; g.beginPath(); g.moveTo(52, 520); g.lineTo(52, 146); g.quadraticCurveTo(52, 122, 76, 122); g.lineTo(920, 122); g.stroke();
+  g.strokeStyle = 'rgba(0,0,0,.45)'; g.beginPath(); g.moveTo(948, 170); g.lineTo(948, 546); g.quadraticCurveTo(948, 568, 924, 568); g.lineTo(80, 568); g.stroke();
+  // innerkant på ramen (skugga ned mot kudden)
+  g.strokeStyle = 'rgba(0,0,0,.5)'; g.lineWidth = 2; rr(g, 72, 142, 856, 406, 8); g.stroke();
+
+  // botten under kuddarna (mörk)
+  g.fillStyle = '#05341b'; rr(g, 72, 142, 856, 406, 8); g.fill();
+  // tyg
+  const fg = g.createRadialGradient(CX, CY - 20, 30, CX, CY, 560);
+  fg.addColorStop(0, '#2aa85a'); fg.addColorStop(0.55, '#1b8a46'); fg.addColorStop(1, '#0d5e2e');
+  g.fillStyle = fg; g.fillRect(FE.x1, FE.y1, FE.x2 - FE.x1, FE.y2 - FE.y1);
+  for (let i = 0; i < 22000; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.06)';
+    g.fillRect(FE.x1 + rnd() * (FE.x2 - FE.x1), FE.y1 + rnd() * (FE.y2 - FE.y1), 1, 1);
+  }
+  // skugga från kuddarna på tyget
+  const sh = (x0, y0, x1, y1, rx, ry, rw, rh) => { const sg = g.createLinearGradient(x0, y0, x1, y1); sg.addColorStop(0, 'rgba(0,0,0,.4)'); sg.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = sg; g.fillRect(rx, ry, rw, rh); };
+  sh(0, FE.y1, 0, FE.y1 + 12, FE.x1, FE.y1, FE.x2 - FE.x1, 12); sh(0, FE.y2, 0, FE.y2 - 12, FE.x1, FE.y2 - 12, FE.x2 - FE.x1, 12);
+  sh(FE.x1, 0, FE.x1 + 12, 0, FE.x1, FE.y1, 12, FE.y2 - FE.y1); sh(FE.x2, 0, FE.x2 - 12, 0, FE.x2 - 12, FE.y1, 12, FE.y2 - FE.y1);
+  // markeringar
+  const hx = FE.x1 + (FE.x2 - FE.x1) * 0.25;
+  g.strokeStyle = 'rgba(255,255,255,.13)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(hx, FE.y1); g.lineTo(hx, FE.y2); g.stroke();
+  g.fillStyle = 'rgba(255,255,255,.28)';
+  for (const x of [hx, FOOT_X]) { g.beginPath(); g.arc(x, CY, 2.5, 0, 7); g.fill(); }
+  // kuddar (gummi) med snedskurna ändar mot hålen
+  const cushion = (pts, x0, y0, x1, y1, nose) => {
+    const cg = g.createLinearGradient(x0, y0, x1, y1);
+    cg.addColorStop(0, '#05391b'); cg.addColorStop(0.65, '#0f7a3b'); cg.addColorStop(1, '#1c9d4f');
+    g.fillStyle = cg; g.beginPath(); pts.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.4)'; g.lineWidth = 1; g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.22)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(nose[0][0], nose[0][1]); g.lineTo(nose[1][0], nose[1][1]); g.stroke();
+  };
+  cushion([[106, 142], [478, 142], [470, 160], [122, 160]], 0, 142, 0, 160, [[122, 160], [470, 160]]);
+  cushion([[522, 142], [894, 142], [878, 160], [530, 160]], 0, 142, 0, 160, [[530, 160], [878, 160]]);
+  cushion([[106, 548], [478, 548], [470, 530], [122, 530]], 0, 548, 0, 530, [[122, 530], [470, 530]]);
+  cushion([[522, 548], [894, 548], [878, 530], [530, 530]], 0, 548, 0, 530, [[530, 530], [878, 530]]);
+  cushion([[72, 176], [72, 514], [90, 498], [90, 192]], 72, 0, 90, 0, [[90, 192], [90, 498]]);
+  cushion([[928, 176], [928, 514], [910, 498], [910, 192]], 928, 0, 910, 0, [[910, 192], [910, 498]]);
+  // diamanter (pärlemor)
+  const dia = (x, y) => { const dg = g.createRadialGradient(x - 1, y - 1, 0.5, x, y, 4); dg.addColorStop(0, '#fffbe8'); dg.addColorStop(1, '#bfae80'); g.fillStyle = dg; g.beginPath(); g.moveTo(x, y - 4); g.lineTo(x + 3, y); g.lineTo(x, y + 4); g.lineTo(x - 3, y); g.closePath(); g.fill(); };
+  for (const k of [1, 2, 3, 5, 6, 7]) { const x = FE.x1 + (FE.x2 - FE.x1) * k / 8; dia(x, 131); dia(x, 559); }
+  for (const k of [1, 2, 3]) { const y = FE.y1 + (FE.y2 - FE.y1) * k / 4; dia(61, y); dia(939, y); }
+  // metallplåtar på träramen (som på ett riktigt bord)
+  const chrome = (x0, y0, x1, y1) => { const mg = g.createLinearGradient(x0, y0, x1, y1); mg.addColorStop(0, '#f4f5f7'); mg.addColorStop(0.45, '#a9adb3'); mg.addColorStop(0.7, '#d9dbde'); mg.addColorStop(1, '#7b7f86'); return mg; };
+  const poly = pts => { g.beginPath(); pts.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); };
+  g.save(); rr(g, 50, 120, 900, 450, 24); g.clip();
+  for (const [fx, fy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    g.save(); g.translate(fx < 0 ? 1000 : 0, fy < 0 ? 690 : 0); g.scale(fx, fy);
+    poly([[50, 120], [122, 120], [100, 142], [72, 142], [72, 170], [50, 192]]);
+    g.fillStyle = chrome(50, 120, 110, 180); g.fill(); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 1.5; g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = 1; g.beginPath(); g.moveTo(54, 188); g.lineTo(54, 124); g.lineTo(118, 124); g.stroke();
+    // mittenplåt på långsidorna
+    if (fx > 0) {
+      poly([[468, 120], [532, 120], [522, 142], [478, 142]]);
+      g.fillStyle = chrome(468, 120, 532, 142); g.fill(); g.strokeStyle = 'rgba(0,0,0,.55)'; g.lineWidth = 1.5; g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = 1; g.beginPath(); g.moveTo(472, 123.5); g.lineTo(528, 123.5); g.stroke();
+    }
+    g.restore();
+  }
+  g.restore();
+  // hål: runda bakåt, men aldrig uppe på det gröna tyget
+  g.save(); rr(g, 50, 120, 900, 450, 24); g.clip();
+  g.beginPath(); g.rect(0, 0, W, H); g.rect(FE.x1, FE.y1, FE.x2 - FE.x1, FE.y2 - FE.y1); g.clip('evenodd');
+  for (const p of POCKETS) {
+    const hg = g.createRadialGradient(p.hx, p.hy - 2, 2, p.hx, p.hy, p.hr);
+    hg.addColorStop(0, '#000'); hg.addColorStop(0.8, '#040404'); hg.addColorStop(1, '#1a1511');
+    g.fillStyle = hg; g.beginPath(); g.arc(p.hx, p.hy, p.hr, 0, 7); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,.6)'; g.lineWidth = 2; g.beginPath(); g.arc(p.hx, p.hy, p.hr + 1, 0, 7); g.stroke();
+  }
+  g.restore();
+}
+(function () {
+  const g = bg.getContext('2d');
+  try { g.filter = 'blur(1.6px)'; } catch (_) {}
+  drawForest(g);
+  try { g.filter = 'none'; } catch (_) {}
+  const dark = g.createRadialGradient(W / 2, 330, 150, W / 2, 330, 720);
+  dark.addColorStop(0, 'rgba(0,0,0,0)'); dark.addColorStop(1, 'rgba(0,0,0,.55)');
+  g.fillStyle = dark; g.fillRect(0, 0, W, H);
+  drawTable(g);
+  // lampljus över bordet
+  const lamp = g.createRadialGradient(CX, CY, 60, CX, CY, 560);
+  lamp.addColorStop(0, 'rgba(255,255,220,.10)'); lamp.addColorStop(1, 'rgba(0,0,0,.28)');
+  g.fillStyle = lamp; rr(g, 50, 120, 900, 450, 24); g.fill();
+})();
+
+// ---------- Bollar ----------
+function newBalls() {
+  const arr = [{ id: 0, color: 'white', x: FE.x1 + (FE.x2 - FE.x1) * 0.25, y: CY, vx: 0, vy: 0, out: false, sink: 0, top: 0, side: 0 }];
+  const dyr = 2 * R + 0.6;
+  let idx = 0, alt = 0, id = 0;
+  for (let row = 0; row < 5; row++) {
+    for (let j = 0; j <= row; j++) {
+      let color;
+      if (idx === 4) color = 'black';           // svarta i mitten
+      else { color = alt % 2 === 0 ? 'yellow' : 'red'; alt++; } // varannan gul / röd
+      arr.push({ id: ++id, color, x: FOOT_X + row * RACK_DX, y: CY + (j - row / 2) * dyr, vx: 0, vy: 0, out: false, sink: 0 });
+      idx++;
+    }
+  }
+  return arr;
+}
+
+// ---------- Fysik ----------
+function sideKick(b, ivx, ivy, vertical) {
+  if (b.id !== 0 || !b.side) return;
+  const sp = Math.hypot(ivx, ivy); if (sp < 1) return;
+  const rx = -ivy / sp, ry = ivx / sp;                 // höger om rörelseriktningen
+  const kick = b.side * 0.28 * (vertical ? Math.abs(ivx) : Math.abs(ivy));
+  if (vertical) b.vy += (ry >= 0 ? 1 : -1) * kick; else b.vx += (rx >= 0 ? 1 : -1) * kick;
+  b.side *= 0.5;
+}
+function step(balls, dt, ev) {
+  for (const b of balls) {
+    if (b.out) continue;
+    const s = Math.hypot(b.vx, b.vy);
+    if (s > 0) {
+      const ns = s * (1 - FRIC_K * dt) - FRIC_A * dt;
+      if (ns < 5) { b.vx = 0; b.vy = 0; } else { const f = ns / s; b.vx *= f; b.vy *= f; }
+    }
+    b.x += b.vx * dt; b.y += b.vy * dt;
+  }
+  for (const b of balls) {
+    if (b.out) continue;
+    for (const p of POCKETS) {
+      if (Math.hypot(b.x - p.x, b.y - p.y) < p.r) {
+        b.out = true; b.vx = 0; b.vy = 0; b.sink = 0.3; b.px = p.hx; b.py = p.hy;
+        if (b.color === 'white') ev.cue = true; else ev.pocketed.push(b);
+        break;
+      }
+    }
+  }
+  for (const b of balls) {
+    if (b.out) continue;
+    if (b.x < FE.x1 + R) { b.x = FE.x1 + R; if (b.vx < 0) { const ix = b.vx, iy = b.vy; b.vx = -b.vx * E_WALL; sideKick(b, ix, iy, true); } }
+    else if (b.x > FE.x2 - R) { b.x = FE.x2 - R; if (b.vx > 0) { const ix = b.vx, iy = b.vy; b.vx = -b.vx * E_WALL; sideKick(b, ix, iy, true); } }
+    if (b.y < FE.y1 + R) { b.y = FE.y1 + R; if (b.vy < 0) { const ix = b.vx, iy = b.vy; b.vy = -b.vy * E_WALL; sideKick(b, ix, iy, false); } }
+    else if (b.y > FE.y2 - R) { b.y = FE.y2 - R; if (b.vy > 0) { const ix = b.vx, iy = b.vy; b.vy = -b.vy * E_WALL; sideKick(b, ix, iy, false); } }
+  }
+  for (let i = 0; i < balls.length; i++) {
+    const a = balls[i]; if (a.out) continue;
+    for (let j = i + 1; j < balls.length; j++) {
+      const b = balls[j]; if (b.out) continue;
+      const dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy;
+      if (d2 < 4 * R * R && d2 > 1e-9) {
+        if (!ev.first) { if (a.id === 0) ev.first = b.color; else if (b.id === 0) ev.first = a.color; }
+        const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, ov = (2 * R - d) / 2;
+        a.x -= nx * ov; a.y -= ny * ov; b.x += nx * ov; b.y += ny * ov;
+        const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+        if (rel > 0) {
+          const cue = a.id === 0 ? a : b.id === 0 ? b : null;
+          let cvx = 0, cvy = 0, csp = 0;
+          if (cue) { cvx = cue.vx; cvy = cue.vy; csp = Math.hypot(cvx, cvy); }
+          const j2 = rel * (1 + E_BALL) / 2;
+          a.vx -= j2 * nx; a.vy -= j2 * ny; b.vx += j2 * nx; b.vy += j2 * ny;
+          if (cue && cue.top && csp > 1) {            // framåt-/bakåtspinn verkar vid träffen
+            cue.vx += cvx / csp * cue.top * 0.5 * rel; cue.vy += cvy / csp * cue.top * 0.5 * rel; cue.top = 0;
+          }
+        }
+      }
+    }
+  }
+}
+const isMoving = bs => bs.some(b => !b.out && (b.vx !== 0 || b.vy !== 0));
+function simulate(balls, ang, speed) {
+  const bs = balls.map(b => ({ ...b }));
+  const c = bs[0]; c.top = 0; c.side = 0; c.vx = Math.cos(ang) * speed; c.vy = Math.sin(ang) * speed;
+  const e = { pocketed: [], cue: false, first: null };
+  for (let i = 0; i < 240 * 14; i++) { step(bs, DT, e); if (!isMoving(bs)) break; }
+  return e;
+}
+
+// ---------- Regler ----------
+let balls = newBalls(), group = [null, null], turn = 0, state = 'menu', diff = 'medium';
+let aim = 0, pull = 0, downPos = null, mouse = { x: 300, y: CY };
+let ev = { pocketed: [], cue: false, first: null }, ownBefore = 0, isBreak = true, acc = 0, msg = '', strike = null;
+let placePos = { x: CX, y: CY }, placeValid = false;
+const SP = { x: 500, y: 68, r: 28 };
+const spin = { x: 0, y: 0 };
+let spinDrag = false, spinOpen = false, zoomK = 0;
+const ZC = { x: 500, y: 320, r: 130 };
+const BTN_RESET = { x: 380, y: 500, w: 110, h: 36, t: 'Nollställ' }, BTN_DONE = { x: 510, y: 500, w: 110, h: 36, t: 'Klar' };
+const inRect = (m, b) => m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h;
+function setSpinFrom(m, c = SP) {
+  let ox = (m.x - c.x) / (c.r * 0.72), oy = -(m.y - c.y) / (c.r * 0.72);
+  const l = Math.hypot(ox, oy); if (l > 1) { ox /= l; oy /= l; }
+  spin.x = Math.abs(ox) < 0.08 ? 0 : ox; spin.y = Math.abs(oy) < 0.08 ? 0 : oy;
+}
+const bot = { phase: '', t: 0, from: 0, dAng: 0, to: 0, pullT: 0, speed: 0 };
+
+function ownRemaining(p) {
+  const g = group[p]; if (!g) return 99;
+  return balls.filter(b => !b.out && b.color === g).length;
+}
+function targetsFor(p) {
+  const g = group[p];
+  if (!g) return balls.filter(b => !b.out && (b.color === 'yellow' || b.color === 'red'));
+  const own = balls.filter(b => !b.out && b.color === g);
+  return own.length ? own : balls.filter(b => !b.out && b.color === 'black');
+}
+function wrongFirst(g, ownRem, e) {
+  if (!e.first) return 'none';
+  if (!g) return e.first === 'black' ? 'black' : '';
+  if (ownRem === 0) return e.first === 'black' ? '' : 'other';
+  if (e.first === 'black') return 'black';
+  return e.first === g ? '' : 'other';
+}
+function judgeShot(g, ownRem, e) {
+  const blackIn = e.pocketed.some(b => b.color === 'black');
+  const wf = wrongFirst(g, ownRem, e), foul = !!wf;
+  if (blackIn) {
+    const legal = !!g && ownRem === 0 && !e.cue && !foul;
+    return { result: legal ? 'win' : 'lose', foul, wf };
+  }
+  let group2 = g, newGroup = null;
+  if (!group2) {
+    const first = e.pocketed.find(b => b.color !== 'black');
+    if (first) { newGroup = first.color; group2 = newGroup; }
+  }
+  const gotOwn = !!group2 && e.pocketed.some(b => b.color === group2);
+  return { result: 'continue', newGroup, foul, wf, keep: !e.cue && !foul && gotOwn };
+}
+function respotBlack(bl) {
+  let x = FOOT_X + 2 * RACK_DX;
+  const free = xx => balls.every(b => b === bl || b.out || Math.hypot(b.x - xx, b.y - CY) >= 2 * R + 0.5);
+  while (!free(x)) x += 2 * R + 1;
+  bl.out = false; bl.sink = 0; bl.x = x; bl.y = CY; bl.vx = 0; bl.vy = 0;
+}
+function validPlace(x, y) {
+  for (const b of balls) { if (b.out || b.id === 0) continue; if (Math.hypot(b.x - x, b.y - y) < 2 * R + 1) return false; }
+  for (const p of POCKETS) if (Math.hypot(p.x - x, p.y - y) < p.r + R) return false;
+  return true;
+}
+function scoreText() {
+  if (!group[0]) return 'Färgerna hann inte bestämmas.';
+  return 'Poäng – du: ' + (7 - ownRemaining(0)) + '/7 bollar • boten: ' + (7 - ownRemaining(1)) + '/7 bollar';
+}
+function showOverlay(title, sub, again) {
+  elTtl.textContent = title; elSub.textContent = sub;
+  elAgain.style.display = again ? 'block' : 'none';
+  elRules.style.display = again ? 'none' : 'block';
+  overlay.classList.remove('hide');
+}
+function startGame(d) {
+  diff = d; balls = newBalls(); group = [null, null]; turn = 0; isBreak = true;
+  aim = 0; pull = 0; state = 'aim'; acc = 0;
+  msg = 'Du spränger! Sikta med musen, håll ner och dra bakåt för kraft.';
+  overlay.classList.add('hide');
+}
+function endGame(winner, reason) {
+  state = 'over'; pull = 0;
+  showOverlay(winner === 0 ? 'Du vann! 🏆' : 'Boten vann!', reason + ' ' + scoreText(), true);
+}
+function startTurn(hand) {
+  pull = 0;
+  if (turn === 0) {
+    if (hand) { state = 'place'; balls[0].out = true; balls[0].sink = 0; }
+    else state = 'aim';
+  } else { if (hand) { balls[0].out = true; balls[0].sink = 0; } state = 'bot'; bot.phase = hand ? 'place' : 'wait'; bot.t = 0; }
+}
+function fire(angle, speed, sp) {
+  const c = balls[0]; c.top = sp ? sp.y : 0; c.side = sp ? sp.x : 0; c.vx = Math.cos(angle) * speed; c.vy = Math.sin(angle) * speed;
+  ev = { pocketed: [], cue: false, first: null }; ownBefore = ownRemaining(turn); acc = 0; pull = 0; state = 'moving';
+}
+function beginStrike(angle, speed, sp) { strike = { t: 0, angle, speed, p0: pull, sp }; aim = angle; state = 'strike'; }
+
+function finishShot() {
+  const s = turn, o = 1 - turn;
+  const who = p => p === 0 ? 'Du' : 'Boten';
+  let note = '';
+  if (isBreak) {
+    isBreak = false;
+    const bi = ev.pocketed.findIndex(b => b.color === 'black');
+    if (bi >= 0) { respotBlack(ev.pocketed.splice(bi, 1)[0]); note = 'Svarta bollen sattes tillbaka (ingen förlust på sprängningen). '; }
+  }
+  const j = judgeShot(group[s], ownBefore, ev);
+  if (j.result === 'win') { endGame(s, 'Svarta bollen i hålet – ' + (s === 0 ? 'snyggt spelat!' : 'boten var bättre den här gången.')); return; }
+  if (j.result === 'lose') {
+    const why = ev.cue ? 'Vita bollen åkte i hål samtidigt som den svarta.'
+      : j.foul ? 'Fel boll träffades först när den svarta gick i.'
+      : group[s] ? 'Svarta bollen åkte i innan alla egna bollar var borta.'
+      : 'Svarta bollen åkte i innan färgerna var bestämda.';
+    endGame(o, (s === 0 ? 'Du förlorade. ' : 'Boten förlorade. ') + why); return;
+  }
+  let text = note;
+  if (j.newGroup) {
+    group[s] = j.newGroup; group[o] = j.newGroup === 'yellow' ? 'red' : 'yellow';
+    text += (s === 0 ? 'Du är ' : 'Boten är ') + GN[group[s]] + ', ' + (s === 0 ? 'boten är ' : 'du är ') + GN[group[o]] + '. ';
+  }
+  if (ev.cue) {
+    turn = o;
+    text += who(s) + ' satte vita bollen i hålet! Boll i hand till ' + (s === 0 ? 'boten.' : 'dig – flytta vita bollen och klicka.');
+    msg = text; startTurn(true); return;
+  }
+  if (j.foul) {
+    turn = o;
+    const what = { none: 'ingen boll alls', black: group[s] ? 'den svarta innan alla dina bollar var borta' : 'den svarta', other: 'fel färg' }[j.wf];
+    text += who(s) + ' träffade ' + what + ' först! Boll i hand till ' + (s === 0 ? 'boten.' : 'dig – flytta vita bollen och klicka.');
+    msg = text; startTurn(true); return;
+  }
+  if (j.keep) {
+    text += s === 0 ? 'Bra! Du skjuter igen.' : 'Boten fick i en boll och skjuter igen.';
+    msg = text; startTurn(false); return;
+  }
+  turn = o; text += o === 0 ? 'Din tur.' : 'Botens tur.';
+  msg = text; startTurn(false);
+}
+
+// ---------- Boten ----------
+const stopDist = v => v / FRIC_K - (FRIC_A / (FRIC_K * FRIC_K)) * Math.log(1 + FRIC_K * v / FRIC_A);
+function speedForDistance(D) {
+  let lo = 0, hi = VMAX * 1.5;
+  for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (stopDist(m) < D) lo = m; else hi = m; }
+  return hi;
+}
+function segDist(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy;
+  let t = l2 ? ((px - ax) * vx + (py - ay) * vy) / l2 : 0; t = clamp(t, 0, 1);
+  return Math.hypot(px - (ax + vx * t), py - (ay + vy * t));
+}
+function blocked(ax, ay, bx, by, ignore) {
+  for (const o of balls) {
+    if (o.out || o === ignore || o.id === 0) continue;
+    if (segDist(o.x, o.y, ax, ay, bx, by) < 2 * R - 1) return true;
+  }
+  return false;
+}
+function candidateShots(cx, cy, targets) {
+  const res = [];
+  for (const t of targets) for (const p of POCKETS) {
+    let ux = p.x - t.x, uy = p.y - t.y; const d2 = Math.hypot(ux, uy); if (d2 < 1) continue; ux /= d2; uy /= d2;
+    const gx = t.x - ux * 2 * R, gy = t.y - uy * 2 * R;
+    if (gx < FE.x1 + R - 2 || gx > FE.x2 - R + 2 || gy < FE.y1 + R - 2 || gy > FE.y2 - R + 2) continue;
+    let vx = gx - cx, vy = gy - cy; const d1 = Math.hypot(vx, vy); if (d1 < 2) continue; vx /= d1; vy /= d1;
+    const cos = vx * ux + vy * uy; if (cos < 0.3) continue;
+    if (blocked(cx, cy, gx, gy, t) || blocked(t.x, t.y, p.x, p.y, t)) continue;
+    const needObj = speedForDistance(d2 + 40);
+    const vImp = needObj / Math.max(cos, 0.4);
+    const v0 = Math.sqrt(vImp * vImp + 2 * (FRIC_A + FRIC_K * vImp) * d1) * 1.05;
+    res.push({ angle: Math.atan2(vy, vx), speed: clamp(v0, 120, VMAX), score: cos * 100 - d1 * 0.06 - d2 * 0.1, t, p });
+  }
+  return res;
+}
+function evalShot(e) {
+  const g = group[1], j = judgeShot(g, ownRemaining(1), e);
+  if (j.result === 'win') return 1000;
+  if (j.result === 'lose') return -1000;
+  const gg = j.newGroup || g; let v = 0;
+  for (const b of e.pocketed) v += (!gg || b.color === gg) ? 40 : -25;
+  if (e.cue) v -= 120; else if (j.foul) v -= 100; else if (j.keep) v += 30;
+  return v;
+}
+function botPlan() {
+  const cue = balls[0], targets = targetsFor(1);
+  const cands = candidateShots(cue.x, cue.y, targets).sort((a, b) => b.score - a.score);
+  let shot = null;
+  const fallback = () => {
+    const t = targets[Math.floor(Math.random() * targets.length)] || balls.find(b => b.id > 0 && !b.out);
+    return { angle: Math.atan2(t.y - cue.y, t.x - cue.x) + rand(-0.12, 0.12), speed: rand(250, 650) };
+  };
+  if (diff === 'hard') {
+    const pool = [];
+    for (const c of cands.slice(0, 8)) for (const m of [1, 0.8, 1.25]) pool.push({ angle: c.angle, speed: clamp(c.speed * m, 120, VMAX) });
+    for (let i = 0; i < 14; i++) {
+      const t = targets[Math.floor(Math.random() * targets.length)];
+      pool.push({ angle: Math.atan2(t.y - cue.y, t.x - cue.x) + (Math.random() - 0.5) * 0.5, speed: rand(150, 850) });
+    }
+    let bestV = -1e9;
+    for (const s of pool) { const v = evalShot(simulate(balls, s.angle, s.speed)); if (v > bestV) { bestV = v; shot = s; } }
+    shot = { angle: shot.angle + gauss() * 0.004, speed: shot.speed * (1 + gauss() * 0.02) };
+  } else if (diff === 'medium') {
+    if (cands.length) {
+      const r = Math.random(), c = cands[r < 0.6 ? 0 : r < 0.85 ? Math.min(1, cands.length - 1) : Math.min(2, cands.length - 1)];
+      shot = { angle: c.angle + gauss() * 0.04, speed: c.speed * (1 + gauss() * 0.08) };
+    } else { const f = fallback(); shot = { angle: f.angle, speed: f.speed }; }
+  } else {
+    if (cands.length && Math.random() < 0.55) {
+      const c = cands[Math.floor(Math.random() * cands.length)];
+      shot = { angle: c.angle + gauss() * 0.11, speed: c.speed * rand(0.65, 1.4) };
+    } else { const f = fallback(); shot = { angle: f.angle + gauss() * 0.08, speed: f.speed }; }
+  }
+  shot.speed = clamp(shot.speed, 100, VMAX);
+  bot.to = shot.angle; bot.speed = shot.speed;
+  bot.pullT = clamp((shot.speed - 60) / (VMAX - 60), 0, 1) * MAXPULL;
+  bot.from = aim; bot.dAng = normAng(bot.to - aim);
+}
+function botPlaceCue() {
+  const tg = targetsFor(1), tries = diff === 'hard' ? 60 : diff === 'medium' ? 14 : 1;
+  let found = 0, guard = 0, best = null, bs = -1e9;
+  while (found < tries && guard < 600) {
+    guard++;
+    const x = rand(FE.x1 + R + 10, FE.x2 - R - 10), y = rand(FE.y1 + R + 10, FE.y2 - R - 10);
+    if (!validPlace(x, y)) continue;
+    found++;
+    const cs = diff === 'easy' ? [] : candidateShots(x, y, tg);
+    const sc = cs.length ? Math.max(...cs.map(c => c.score)) : -50;
+    if (sc > bs) { bs = sc; best = { x, y }; }
+  }
+  if (!best) best = { x: FE.x1 + 80, y: CY };
+  const c = balls[0]; c.out = false; c.sink = 0; c.x = best.x; c.y = best.y; c.vx = 0; c.vy = 0;
+}
+function botUpdate(dt) {
+  bot.t += dt;
+  if (bot.phase === 'place') {
+    if (bot.t > 1.0) { botPlaceCue(); bot.phase = 'wait'; bot.t = 0; }
+  } else if (bot.phase === 'wait') {
+    if (bot.t > 0.8) { botPlan(); bot.phase = 'aim'; bot.t = 0; }
+  } else if (bot.phase === 'aim') {
+    const k = Math.min(1, bot.t / 0.9), e = k * k * (3 - 2 * k);
+    aim = bot.from + bot.dAng * e;
+    if (k >= 1) { aim = bot.to; bot.phase = 'pull'; bot.t = 0; }
+  } else if (bot.phase === 'pull') {
+    const k = Math.min(1, bot.t / 0.7);
+    pull = bot.pullT * k * (2 - k);
+    if (k >= 1) { bot.phase = 'hold'; bot.t = 0; }
+  } else if (bot.phase === 'hold') {
+    if (bot.t > 0.25) beginStrike(bot.to, bot.speed);
+  }
+}
+
+// ---------- Inmatning ----------
+function pos(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height }; }
+function updateAim() {
+  const c = balls[0], dx = mouse.x - c.x, dy = mouse.y - c.y;
+  if (Math.hypot(dx, dy) > 8) aim = Math.atan2(dy, dx);
+}
+cv.addEventListener('pointermove', e => {
+  mouse = pos(e);
+  if (spinOpen) { if (spinDrag) setSpinFrom(mouse, ZC); return; }
+  if (state === 'aim') updateAim();
+  else if (state === 'power') {
+    const dx = Math.cos(aim), dy = Math.sin(aim);
+    pull = clamp(-((mouse.x - downPos.x) * dx + (mouse.y - downPos.y) * dy), 0, MAXPULL);
+  }
+});
+cv.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  mouse = pos(e);
+  if (spinOpen) {
+    if (inRect(mouse, BTN_DONE)) spinOpen = false;
+    else if (inRect(mouse, BTN_RESET)) { spin.x = 0; spin.y = 0; }
+    else if (Math.hypot(mouse.x - ZC.x, mouse.y - ZC.y) < ZC.r + 12) {
+      setSpinFrom(mouse, ZC); spinDrag = true;
+      try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    } else spinOpen = false;
+    return;
+  }
+  if (state === 'aim' && turn === 0 && Math.hypot(mouse.x - SP.x, mouse.y - SP.y) < SP.r + 6) { spinOpen = true; return; }
+  if (state === 'aim') {
+    updateAim(); downPos = { x: mouse.x, y: mouse.y }; pull = 0; state = 'power';
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  } else if (state === 'place') {
+    updatePlace();
+    if (placeValid) {
+      const c = balls[0]; c.out = false; c.sink = 0; c.x = placePos.x; c.y = placePos.y; c.vx = 0; c.vy = 0;
+      state = 'aim'; msg = 'Din tur. Sikta med musen.';
+    }
+  }
+});
+function release() {
+  if (state !== 'power') return;
+  if (pull > 8) beginStrike(aim, 60 + (pull / MAXPULL) * (VMAX - 60), { x: spin.x, y: spin.y });
+  else { state = 'aim'; pull = 0; }
+}
+cv.addEventListener('pointerup', () => { if (spinDrag) { spinDrag = false; return; } release(); });
+cv.addEventListener('pointercancel', () => { if (state === 'power') { state = 'aim'; pull = 0; } });
+cv.addEventListener('contextmenu', e => { e.preventDefault(); if (state === 'power') { state = 'aim'; pull = 0; } });
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && spinOpen) spinOpen = false; else if (e.key === 'Escape' && state === 'power') { state = 'aim'; pull = 0; } });
+document.querySelectorAll('#panel button').forEach(b => b.addEventListener('click', () => startGame(b.dataset.d)));
+
+// ---------- Uppdatera ----------
+function updatePlace() {
+  placePos = { x: clamp(mouse.x, FE.x1 + R, FE.x2 - R), y: clamp(mouse.y, FE.y1 + R, FE.y2 - R) };
+  placeValid = validPlace(placePos.x, placePos.y);
+}
+function update(dt) {
+  if (state !== 'aim') spinOpen = false;
+  const zt = spinOpen ? 1 : 0; zoomK += (zt - zoomK) * Math.min(1, dt * 14); if (Math.abs(zt - zoomK) < 0.005) zoomK = zt;
+  if (state === 'moving') {
+    acc += dt; let n = 0;
+    while (acc >= DT && n < 14) {
+      step(balls, DT, ev); acc -= DT; n++;
+      if (!isMoving(balls)) { acc = 0; finishShot(); break; }
+    }
+  } else if (state === 'strike') {
+    strike.t += dt; pull = strike.p0 * Math.max(0, 1 - strike.t / 0.09);
+    if (strike.t >= 0.09) fire(strike.angle, strike.speed, strike.sp);
+  } else if (state === 'bot') botUpdate(dt);
+  else if (state === 'place') updatePlace();
+  for (const b of balls) if (b.out && b.sink > 0) b.sink -= dt;
+}
+
+// ---------- Rita ----------
+const COLORS = { white: ['#ffffff', '#e4e8ee', '#8d94a0'], yellow: ['#fff39a', '#f4bd10', '#9a6200'], red: ['#ff8070', '#d2202b', '#63080e'], black: ['#707070', '#1c1c1c', '#000'] };
+function drawBall(x, y, color, s = 1, a = 1) {
+  const r = R * s; if (r <= 0.3) return;
+  ctx.save(); ctx.globalAlpha = a;
+  const sx = x + 2.5 * s, sy = y + 3.5 * s;
+  const sg = ctx.createRadialGradient(sx, sy, r * 0.3, sx, sy, r * 1.4);
+  sg.addColorStop(0, 'rgba(0,0,0,.55)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(sx, sy, r * 1.4, 0, 7); ctx.fill();
+  const c = COLORS[color];
+  const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.05, x, y, r * 1.02);
+  g.addColorStop(0, c[0]); g.addColorStop(0.55, c[1]); g.addColorStop(1, c[2]);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  if (color === 'black') {
+    const ng = ctx.createRadialGradient(x - r * 0.1, y - r * 0.1, 0, x, y, r * 0.5);
+    ng.addColorStop(0, '#fff'); ng.addColorStop(1, '#d8d8d8');
+    ctx.fillStyle = ng; ctx.beginPath(); ctx.arc(x, y, r * 0.5, 0, 7); ctx.fill();
+    ctx.fillStyle = '#000'; ctx.font = 'bold ' + Math.round(r * 0.8) + 'px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('8', x, y + r * 0.04);
+  }
+  const hg = ctx.createRadialGradient(x - r * 0.38, y - r * 0.42, 0, x - r * 0.38, y - r * 0.42, r * 0.5);
+  hg.addColorStop(0, 'rgba(255,255,255,.95)'); hg.addColorStop(0.35, 'rgba(255,255,255,.35)'); hg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = Math.max(0.6, r * 0.08);
+  ctx.beginPath(); ctx.arc(x, y, r * 0.86, 0.25, 1.25); ctx.stroke();
+  ctx.restore();
+}
+function drawCue(cx, cy, ang, pv) {
+  const dx = Math.cos(ang), dy = Math.sin(ang), px = -dy, py = dx, tip = R + 3 + pv, L = 270;
+  const P = (t, off) => [cx - dx * (tip + t) + px * off, cy - dy * (tip + t) + py * off];
+  const wAt = t => 2.2 + (t / L) * 4.2;
+  const band = (t0, t1, f0, f1, col) => {
+    const a = P(t0, f0 * wAt(t0)), b = P(t1, f0 * wAt(t1)), c = P(t1, f1 * wAt(t1)), d = P(t0, f1 * wAt(t0));
+    ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.lineTo(c[0], c[1]); ctx.lineTo(d[0], d[1]); ctx.closePath(); ctx.fill();
+  };
+  const part = (t0, t1, col) => { band(t0, t1, -1, 1, col); band(t0, t1, -0.75, -0.3, 'rgba(255,255,255,.30)'); band(t0, t1, 0.25, 1, 'rgba(0,0,0,.30)'); };
+  ctx.save(); ctx.translate(5, 8); ctx.globalAlpha = 0.28; band(0, L, -1, 1, '#000'); ctx.restore();
+  part(0, 4, '#5aa9e6');                       // kritad topp
+  part(4, 17, '#f3efe3');                      // ferrul
+  part(17, L * 0.5, '#ecd2a0');                // skaft (lönn)
+  part(L * 0.5, L * 0.515, '#b9a572');         // skarv
+  part(L * 0.515, L * 0.78, '#4a2511');        // framändan av handtaget
+  for (let k = 0; k < 4; k++) {                // inläggning
+    const t = L * (0.56 + k * 0.05), q = P(t, 0), w = wAt(t) * 0.55;
+    ctx.fillStyle = '#e9d9ab'; ctx.beginPath(); ctx.moveTo(q[0] - dx * 3, q[1] - dy * 3); ctx.lineTo(q[0] + px * w, q[1] + py * w); ctx.lineTo(q[0] + dx * 3, q[1] + dy * 3); ctx.lineTo(q[0] - px * w, q[1] - py * w); ctx.closePath(); ctx.fill();
+  }
+  part(L * 0.78, L * 0.935, '#1b1b1d');        // lindning
+  ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 1;
+  for (let t = L * 0.78; t < L * 0.935; t += 3.2) { const a = P(t, -wAt(t)), b = P(t, wAt(t)); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+  part(L * 0.935, L * 0.945, '#c9a24a');       // guldring
+  part(L * 0.945, L, '#141414');               // gummistopp
+}
+function drawAimGuide() {
+  const c = balls[0], dx = Math.cos(aim), dy = Math.sin(aim);
+  let best = 1e9, hit = null;
+  for (const b of balls) {
+    if (b === c || b.out) continue;
+    const px = c.x - b.x, py = c.y - b.y, bb = dx * px + dy * py, cc = px * px + py * py - 4 * R * R, disc = bb * bb - cc;
+    if (disc < 0) continue;
+    const t = -bb - Math.sqrt(disc);
+    if (t > 0 && t < best) { best = t; hit = b; }
+  }
+  let tw = 1e9;
+  if (dx > 1e-6) tw = Math.min(tw, (FE.x2 - R - c.x) / dx); else if (dx < -1e-6) tw = Math.min(tw, (FE.x1 + R - c.x) / dx);
+  if (dy > 1e-6) tw = Math.min(tw, (FE.y2 - R - c.y) / dy); else if (dy < -1e-6) tw = Math.min(tw, (FE.y1 + R - c.y) / dy);
+  if (tw < best) { best = tw; hit = null; }
+  const gx = c.x + dx * best, gy = c.y + dy * best;
+  const line = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
+  ctx.save(); ctx.lineWidth = 2;
+  ctx.setLineDash([8, 7]); ctx.strokeStyle = 'rgba(255,255,255,.85)'; line(c.x, c.y, gx, gy);
+  ctx.setLineDash([]); ctx.beginPath(); ctx.arc(gx, gy, R, 0, 7); ctx.stroke();
+  if (hit) {
+    let nx = hit.x - gx, ny = hit.y - gy; const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+    ctx.setLineDash([6, 6]); ctx.strokeStyle = 'rgba(255,255,255,.55)'; line(hit.x, hit.y, hit.x + nx * 80, hit.y + ny * 80);
+    const dot = dx * nx + dy * ny; let tx = dx - dot * nx, ty = dy - dot * ny; const tl = Math.hypot(tx, ty);
+    if (tl > 0.05) { tx /= tl; ty /= tl; ctx.strokeStyle = 'rgba(255,255,255,.35)'; line(gx, gy, gx + tx * 45, gy + ty * 45); }
+  }
+  ctx.restore();
+}
+function panel(x, y, w, h, active) {
+  rr(ctx, x, y, w, h, 14); ctx.fillStyle = 'rgba(8,20,14,.75)'; ctx.fill();
+  ctx.lineWidth = active ? 3 : 1; ctx.strokeStyle = active ? '#ffd84a' : 'rgba(255,255,255,.2)'; ctx.stroke();
+}
+function spinLabel() {
+  const parts = [];
+  if (spin.y > 0.15) parts.push('framåt'); else if (spin.y < -0.15) parts.push('bakåt');
+  if (spin.x > 0.15) parts.push('höger'); else if (spin.x < -0.15) parts.push('vänster');
+  return parts.length ? 'Spinn: ' + parts.join(' + ') : 'Ingen spinn';
+}
+function drawSpin() {
+  if (zoomK > 0.01) return;
+  const act = (state === 'aim' || state === 'power' || state === 'strike') && turn === 0;
+  const al = act ? 1 : 0.5;
+  ctx.save();
+  ctx.globalAlpha = al; ctx.fillStyle = 'rgba(8,20,14,.7)'; ctx.beginPath(); ctx.arc(SP.x, SP.y, SP.r + 6, 0, 7); ctx.fill();
+  ctx.strokeStyle = act ? '#ffd84a' : 'rgba(255,255,255,.2)'; ctx.lineWidth = act ? 2 : 1; ctx.stroke();
+  ctx.restore();
+  drawBall(SP.x, SP.y, 'white', SP.r / R, al);
+  ctx.save(); ctx.globalAlpha = al;
+  ctx.strokeStyle = 'rgba(0,0,0,.16)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(SP.x - SP.r * 0.9, SP.y); ctx.lineTo(SP.x + SP.r * 0.9, SP.y); ctx.moveTo(SP.x, SP.y - SP.r * 0.9); ctx.lineTo(SP.x, SP.y + SP.r * 0.9); ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.font = 'bold 8px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('FRAM', SP.x, SP.y - SP.r + 8); ctx.fillText('BAK', SP.x, SP.y + SP.r - 8);
+  ctx.fillText('V', SP.x - SP.r + 7, SP.y); ctx.fillText('H', SP.x + SP.r - 7, SP.y);
+  const dx = SP.x + spin.x * SP.r * 0.72, dy = SP.y - spin.y * SP.r * 0.72;
+  const rg = ctx.createRadialGradient(dx - 1.5, dy - 1.5, 0.5, dx, dy, 5.5);
+  rg.addColorStop(0, '#ff6a5c'); rg.addColorStop(1, '#b3121a');
+  ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(dx, dy, 5, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.restore();
+  ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = (spin.x || spin.y) ? '#ffd84a' : '#9db8a6'; ctx.fillText(spinLabel(), SP.x, SP.y + SP.r + 20);
+}
+function drawSpinZoom() {
+  const k = zoomK; if (k < 0.005) return;
+  const e = k * k * (3 - 2 * k);
+  ctx.save(); ctx.fillStyle = 'rgba(2,8,5,' + (0.72 * e) + ')'; ctx.fillRect(0, 0, W, H); ctx.restore();
+  const cx = SP.x + (ZC.x - SP.x) * e, cy = SP.y + (ZC.y - SP.y) * e, r = SP.r + (ZC.r - SP.r) * e;
+  drawBall(cx, cy, 'white', r / R, 1);
+  ctx.save(); ctx.globalAlpha = e;
+  ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx - r * 0.95, cy); ctx.lineTo(cx + r * 0.95, cy); ctx.moveTo(cx, cy - r * 0.95); ctx.lineTo(cx, cy + r * 0.95); ctx.stroke();
+  ctx.setLineDash([5, 6]); ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.arc(cx, cy, r * 0.72, 0, 7); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.font = 'bold ' + Math.round(r * 0.1) + 'px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('FRAMÅT', cx, cy - r * 0.88); ctx.fillText('BAKÅT', cx, cy + r * 0.88);
+  ctx.fillText('V', cx - r * 0.88, cy); ctx.fillText('H', cx + r * 0.88, cy);
+  const dx = cx + spin.x * r * 0.72, dy = cy - spin.y * r * 0.72, dr = r * 0.085;
+  const rg = ctx.createRadialGradient(dx - dr * 0.3, dy - dr * 0.3, dr * 0.1, dx, dy, dr);
+  rg.addColorStop(0, '#ff7a6b'); rg.addColorStop(1, '#a8101a');
+  ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(dx, dy, dr, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#fff'; ctx.font = 'bold 22px system-ui, sans-serif';
+  ctx.fillText('Välj spinn – dra den röda pricken', 500, 150);
+  ctx.font = 'bold 18px system-ui, sans-serif'; ctx.fillStyle = (spin.x || spin.y) ? '#ffd84a' : '#bcd5c4'; ctx.fillText(spinLabel(), 500, 482);
+  for (const b of [BTN_RESET, BTN_DONE]) {
+    rr(ctx, b.x, b.y, b.w, b.h, 10); ctx.fillStyle = b === BTN_DONE ? '#2e9e5b' : '#3a4a40'; ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 16px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.fillText(b.t, b.x + b.w / 2, b.y + b.h / 2 + 1);
+  }
+  ctx.restore();
+}
+function drawHUD() {
+  const playing = state !== 'menu' && state !== 'over';
+  for (let p = 0; p < 2; p++) {
+    const x = p === 0 ? 50 : 650, g = group[p];
+    panel(x, 18, 300, 84, playing && turn === p);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = '#fff'; ctx.font = 'bold 20px system-ui, sans-serif';
+    ctx.fillText(p === 0 ? 'DU' : 'BOTEN (' + DIFFN[diff] + ')', x + 16, 44);
+    ctx.font = '14px system-ui, sans-serif'; ctx.fillStyle = '#bcd5c4';
+    if (!g) ctx.fillText('Färg: ej bestämd än', x + 16, 66);
+    else {
+      ctx.fillText('Spelar ' + GN[g] + ' – kvar:', x + 16, 66);
+      const rem = ownRemaining(p);
+      for (let i = 0; i < 7; i++) {
+        const bx = x + 26 + i * 30, by = 85;
+        if (i < rem) drawBall(bx, by, g, 0.8);
+        else { ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(bx, by, R * 0.8, 0, 7); ctx.stroke(); }
+      }
+    }
+  }
+  if (playing) {
+    ctx.fillStyle = '#ffd84a'; ctx.font = 'bold 22px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.font = 'bold 15px system-ui, sans-serif';
+    ctx.fillText(turn === 0 ? '◀ DIN TUR' : 'BOTENS TUR ▶', 500, 26);
+  }
+  drawSpin();
+  // meddelande
+  if (msg) {
+    ctx.font = '17px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillText(msg, 501, 597);
+    ctx.fillStyle = '#fff'; ctx.fillText(msg, 500, 596);
+  }
+  // kraftmätare
+  const bx = 320, by = 609, bw = 360, bh = 14;
+  rr(ctx, bx, by, bw, bh, 7); ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fill();
+  const f = clamp(pull / MAXPULL, 0, 1);
+  if (f > 0.01) {
+    const gg = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+    gg.addColorStop(0, '#3ecf6b'); gg.addColorStop(0.6, '#f2d33a'); gg.addColorStop(1, '#e8402f');
+    ctx.save(); rr(ctx, bx, by, bw, bh, 7); ctx.clip(); ctx.fillStyle = gg; ctx.fillRect(bx, by, bw * f, bh); ctx.restore();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,.4)'; ctx.lineWidth = 1.5; rr(ctx, bx, by, bw, bh, 7); ctx.stroke();
+  ctx.font = 'bold 12px system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.fillStyle = '#cfe5d6'; ctx.fillText('KRAFT', bx - 10, by + 11);
+}
+function render() {
+  ctx.drawImage(bg, 0, 0);
+  for (const b of balls) {
+    if (!b.out) drawBall(b.x, b.y, b.color);
+    else if (b.sink > 0) drawBall(b.px, b.py, b.color, Math.max(0, b.sink / 0.3), 1);
+  }
+  if (state === 'place') drawBall(placePos.x, placePos.y, 'white', 1, placeValid ? 0.85 : 0.35);
+  if (state === 'place' && !placeValid) {
+    ctx.strokeStyle = '#ff5a4d'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(placePos.x, placePos.y, R + 3, 0, 7); ctx.stroke();
+  }
+  const showCue = !balls[0].out && ((state === 'aim' || state === 'power') || state === 'strike' || (state === 'bot' && bot.phase !== 'place'));
+  if (showCue) {
+    if ((state === 'aim' || state === 'power') && turn === 0) drawAimGuide();
+    drawCue(balls[0].x, balls[0].y, aim, pull);
+  }
+  drawHUD();
+  drawSpinZoom();
+}
+
+// ---------- Start ----------
+let last = 0;
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - last) / 1000 || 0.016); last = ts;
+  update(dt); render(); requestAnimationFrame(frame);
+}
+showOverlay('Biljard 🎱', '8-ball mot en bot – gula och röda bollar, svart i slutet.', false);
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
