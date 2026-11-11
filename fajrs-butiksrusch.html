@@ -2,7 +2,12 @@
 <html lang="sv">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fajr">
+<meta name="theme-color" content="#0b2a1c">
 <title>Fajrs Butiksrusch</title>
 <style>
   :root { --green:#00a142; --dark:#00563a; --deep:#0b2a1c; --light:#e6f4ea; --yellow:#ffd54a; }
@@ -67,6 +72,46 @@
     .newhs { font-size:15px; }
     #carry { font-size:13px; text-align:center; }
   }
+
+  /* ---- Mobil i liggande läge: spelplan till vänster, poäng + pilar till höger ---- */
+  @media (orientation: landscape) {
+    body.touch { display:grid; grid-template-columns:auto 176px; grid-template-rows:auto 1fr;
+                 grid-template-areas:"game hud" "game pad"; gap:6px 10px; padding:6px;
+                 height:100vh; height:100dvh; overflow:hidden; overscroll-behavior:none;
+                 align-content:center; justify-content:center; }
+    body.touch h1, body.touch #carry, body.touch .help { display:none; }
+    body.touch .wrap { grid-area:game; align-self:center;
+                       width:min(calc((100vh - 20px) * 20 / 14), calc(100vw - 206px));
+                       width:min(calc((100dvh - 20px) * 20 / 14), calc(100vw - 206px)); }
+    body.touch .hud { grid-area:hud; display:grid; grid-template-columns:1fr 1fr; gap:4px; width:100%; margin:0; }
+    body.touch .box { min-width:0; padding:3px 4px; font-size:13px; border-width:2px; }
+    body.touch .box small { font-size:8px; }
+    body.touch .hud button { padding:4px; font-size:12px; box-shadow:2px 2px 0 #000; border-width:2px; }
+    body.touch .dpad { grid-area:pad; margin:0; align-self:center; justify-self:center;
+                       grid-template-columns:repeat(3, 54px); grid-template-rows:repeat(3, 54px); gap:5px; }
+    body.touch .dbtn { font-size:24px; }
+    body.touch canvas { border-width:3px; }
+    body.touch .overlay { inset:3px; padding:8px; gap:5px; }
+    body.touch .overlay h2 { font-size:17px; }
+    body.touch .overlay p { font-size:11px; line-height:1.35; }
+    body.touch .overlay button { font-size:13px; padding:5px 12px; }
+    body.touch .big { font-size:28px; }
+    body.touch .newhs { font-size:14px; }
+  }
+
+  /* ---- Mobil i stående läge: be spelaren vrida mobilen ---- */
+  .rotate { display:none; position:fixed; inset:0; z-index:50; background:var(--deep);
+            flex-direction:column; align-items:center; justify-content:center; gap:16px; text-align:center; padding:24px; }
+  .rotate .phone { width:46px; height:78px; border:5px solid var(--green); border-radius:8px;
+                   animation:turn 1.8s ease-in-out infinite; }
+  @keyframes turn { 0%,25% { transform:rotate(0); } 60%,100% { transform:rotate(90deg); } }
+  .rotate p { margin:0; font-size:18px; font-weight:bold; }
+  @media (orientation: portrait) { body.touch .rotate { display:flex; } }
+
+  .tip { position:fixed; inset:0; z-index:60; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; padding:16px; }
+  .tip.hidden { display:none; }
+  .tip div { background:var(--dark); border:3px solid var(--green); padding:16px; max-width:420px; text-align:center; font-size:14px; line-height:1.5; }
+  .tip button { margin-top:10px; }
 </style>
 </head>
 <body>
@@ -77,7 +122,8 @@
     <div class="box timer" id="timerBox"><small>TID</small><span id="time">60</span></div>
     <div class="box"><small>STREAK</small><span id="streak">0</span> <span id="mult">x1</span></div>
     <div class="box"><small>HIGHSCORE</small><span id="hs">0</span></div>
-    <button id="restartBtn">↻ Starta om</button>
+    <button id="restartBtn">↻ Omstart</button>
+    <button id="fsBtn">⛶ Helskärm</button>
   </div>
 
   <div class="wrap">
@@ -112,6 +158,22 @@
     <div class="center">FAJR</div>
     <div class="dbtn right" data-key="ArrowRight">▶</div>
     <div class="dbtn down" data-key="ArrowDown">▼</div>
+  </div>
+
+  <div class="rotate">
+    <div class="phone"></div>
+    <p>Vrid mobilen till liggande läge för att spela</p>
+    <button id="fsBtn2">⛶ Helskärm + liggande</button>
+  </div>
+
+  <div class="tip hidden" id="fsTip">
+    <div>
+      <b>Helskärm på iPhone</b><br>
+      Safari på iPhone tillåter inte helskärm direkt på en sida. Gör så här istället:<br>
+      tryck på <b>Dela</b>-knappen → <b>Lägg till på hemskärmen</b>.<br>
+      Öppna sen spelet från ikonen på hemskärmen – då fyller det hela skärmen.
+      <br><button id="tipClose">OK</button>
+    </div>
   </div>
 
 <script>
@@ -335,11 +397,14 @@
     }
   }
 
+  const portraitMQ = window.matchMedia ? matchMedia('(orientation: portrait)') : null;
+  const pausedForRotate = () => document.body.classList.contains('touch') && portraitMQ && portraitMQ.matches;
+
   function update(dt) {
     clock += dt;
     for (const p of popups) p.t += dt;
     popups = popups.filter(p => p.t < 1.2);
-    if (state !== 'play') return;
+    if (state !== 'play' || pausedForRotate()) return;
 
     timeLeft -= dt;
     if (hitTimer > 0) hitTimer -= dt;
@@ -583,6 +648,38 @@
   $('startBtn').addEventListener('click', startGame);
   $('againBtn').addEventListener('click', startGame);
   $('restartBtn').addEventListener('click', e => { e.currentTarget.blur(); startGame(); });
+
+  // ---------- Helskärm ----------
+  const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+  async function toggleFullscreen(e) {
+    if (e && e.currentTarget) e.currentTarget.blur();
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (fsElement()) {
+      try { await (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (err) {}
+      return;
+    }
+    if (!req) { $('fsTip').classList.remove('hidden'); return; } // t.ex. iPhone
+    try {
+      await req.call(el);
+      try { await screen.orientation.lock('landscape'); } catch (err) {}
+    } catch (err) {
+      $('fsTip').classList.remove('hidden');
+    }
+  }
+  function updateFsButtons() {
+    const on = !!fsElement();
+    $('fsBtn').textContent = on ? '⛶ Avsluta helskärm' : '⛶ Helskärm';
+  }
+  $('fsBtn').addEventListener('click', toggleFullscreen);
+  $('fsBtn2').addEventListener('click', toggleFullscreen);
+  $('tipClose').addEventListener('click', () => $('fsTip').classList.add('hidden'));
+  document.addEventListener('fullscreenchange', updateFsButtons);
+  document.addEventListener('webkitfullscreenchange', updateFsButtons);
+  // Redan i helskärm om spelet öppnats från hemskärmen
+  if (window.navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches)) {
+    $('fsBtn').style.display = 'none';
+  }
 
   // ---------- Spel-loop ----------
   let last = performance.now();
