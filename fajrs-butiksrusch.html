@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fajrs Butiksrusch</title>
+<style>
+  :root { --green:#00a142; --dark:#00563a; --deep:#0b2a1c; --light:#e6f4ea; --yellow:#ffd54a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--deep); color:#fff; font-family:"Courier New",ui-monospace,monospace;
+         display:flex; flex-direction:column; align-items:center; min-height:100vh; padding:12px; }
+  h1 { margin:4px 0 10px; font-size:28px; letter-spacing:2px; color:var(--light);
+       text-shadow:3px 3px 0 var(--dark); }
+  h1 span { color:var(--green); }
+  .hud { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:10px; width:min(960px,96vw); }
+  .box { background:var(--dark); border:3px solid var(--green); padding:6px 12px; font-weight:bold; font-size:16px; min-width:110px; text-align:center; }
+  .box small { display:block; font-size:11px; color:#a8e6bf; letter-spacing:1px; }
+  .box.timer.low { border-color:#ff5252; color:#ffb3b3; }
+  #mult { color:var(--yellow); }
+  button { font-family:inherit; font-weight:bold; font-size:16px; background:var(--green); color:#fff;
+           border:3px solid #fff; padding:8px 16px; cursor:pointer; box-shadow:4px 4px 0 #000; }
+  button:hover { background:#00c050; }
+  button:active { transform:translate(2px,2px); box-shadow:2px 2px 0 #000; }
+  .wrap { position:relative; width:min(960px,96vw); }
+  canvas { display:block; width:100%; height:auto; image-rendering:pixelated; image-rendering:crisp-edges;
+           border:4px solid var(--green); background:#999; }
+  .overlay { position:absolute; inset:4px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+             background:rgba(0,40,25,.88); text-align:center; gap:10px; padding:20px; overflow:auto; justify-content:safe center; }
+  .overlay.hidden { display:none; }
+  .overlay h2 { margin:0; font-size:30px; color:var(--yellow); text-shadow:3px 3px 0 #000; }
+  .overlay p { margin:0; font-size:17px; line-height:1.5; max-width:560px; }
+  .big { font-size:44px; font-weight:bold; color:#fff; text-shadow:3px 3px 0 var(--dark); }
+  .newhs { color:var(--yellow); font-weight:bold; font-size:20px; animation:blink .6s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  #carry { margin-top:8px; min-height:22px; font-size:16px; font-weight:bold; color:var(--yellow); }
+  .help { margin-top:6px; font-size:13px; color:#a8e6bf; }
+
+  /* ---- Pilknappar för mobil ---- */
+  html, body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
+  .dpad { display:none; margin-top:10px; grid-template-columns:repeat(3, 72px); grid-template-rows:repeat(3, 72px);
+          gap:6px; touch-action:none; }
+  body.touch .dpad { display:grid; }
+  body.touch .help { display:none; }
+  .dbtn { background:var(--green); border:3px solid #fff; color:#fff; font-size:30px; font-weight:bold;
+          display:flex; align-items:center; justify-content:center; box-shadow:4px 4px 0 #000;
+          touch-action:none; -webkit-tap-highlight-color:transparent; }
+  .dbtn.on { background:#ffd54a; color:var(--dark); transform:translate(2px,2px); box-shadow:2px 2px 0 #000; }
+  .dpad .up { grid-column:2; grid-row:1; }
+  .dpad .left { grid-column:1; grid-row:2; }
+  .dpad .center { grid-column:2; grid-row:2; background:var(--dark); border:3px solid var(--green);
+                  display:flex; align-items:center; justify-content:center; font-size:12px; color:#a8e6bf; }
+  .dpad .right { grid-column:3; grid-row:2; }
+  .dpad .down { grid-column:2; grid-row:3; }
+
+  @media (max-width:600px) {
+    body { padding:8px; }
+    h1 { font-size:20px; margin:2px 0 8px; }
+    .hud { gap:5px; margin-bottom:8px; }
+    .box { min-width:0; flex:1 1 22%; padding:4px 6px; font-size:14px; }
+    .box small { font-size:9px; }
+    #restartBtn { flex:1 1 100%; padding:6px; font-size:14px; }
+    .overlay { padding:10px; gap:6px; }
+    .overlay h2 { font-size:18px; }
+    .overlay p { font-size:12px; }
+    .overlay button { font-size:14px; padding:6px 12px; }
+    .big { font-size:30px; }
+    .newhs { font-size:15px; }
+    #carry { font-size:13px; text-align:center; }
+  }
+</style>
+</head>
+<body>
+  <h1>FAJRS <span>BUTIKSRUSCH</span></h1>
+
+  <div class="hud">
+    <div class="box"><small>POÄNG</small><span id="score">0</span></div>
+    <div class="box timer" id="timerBox"><small>TID</small><span id="time">60</span></div>
+    <div class="box"><small>STREAK</small><span id="streak">0</span> <span id="mult">x1</span></div>
+    <div class="box"><small>HIGHSCORE</small><span id="hs">0</span></div>
+    <button id="restartBtn">↻ Starta om</button>
+  </div>
+
+  <div class="wrap">
+    <canvas id="c"></canvas>
+
+    <div class="overlay" id="startScreen">
+      <h2>Hjälp Fajr packa varor!</h2>
+      <p>Spring med <b>piltangenterna</b>. Plocka upp varan som dyker upp i gångarna
+         och lämna den vid hyllan som <b style="color:#ffd54a">blinkar gult</b>.</p>
+      <p>Varje leverans på raken ökar din <b>streak</b> → mer poäng per vara.
+         Var 5:e leverans i rad ger <b>+2 sekunder</b>!</p>
+      <p>Akta kunderna i gångarna – krockar du nollställs din streak.</p>
+      <button id="startBtn">▶ STARTA (60 sek)</button>
+    </div>
+
+    <div class="overlay hidden" id="overScreen">
+      <h2>TIDEN ÄR SLUT!</h2>
+      <div>Dina poäng</div>
+      <div class="big" id="finalScore">0</div>
+      <div class="newhs" id="newHs" style="display:none">★ NY HIGHSCORE! ★</div>
+      <p id="overInfo"></p>
+      <button id="againBtn">▶ KÖR IGEN</button>
+    </div>
+  </div>
+
+  <div id="carry"></div>
+  <div class="help">Piltangenter = gå · Enter = kör igen</div>
+
+  <div class="dpad" id="dpad">
+    <div class="dbtn up" data-key="ArrowUp">▲</div>
+    <div class="dbtn left" data-key="ArrowLeft">◀</div>
+    <div class="center">FAJR</div>
+    <div class="dbtn right" data-key="ArrowRight">▶</div>
+    <div class="dbtn down" data-key="ArrowDown">▼</div>
+  </div>
+
+<script>
+(() => {
+  // ---------- Inställningar ----------
+  const T = 16, COLS = 20, ROWS = 14;
+  const GAME_TIME = 60;
+  const SHELF_X = [3, 6, 9, 12, 15];        // hyllornas kolumner
+  const SHELF_TOP = 3, SHELF_BOT = 10;      // hyllornas rader
+  const CATS = [
+    { name: 'Mejeri', item: 'mjölk',  color: '#3d8bfd' },
+    { name: 'Bröd',   item: 'bröd',   color: '#c8843c' },
+    { name: 'Frukt',  item: 'äpple',  color: '#e53935' },
+    { name: 'Grönt',  item: 'gurka',  color: '#2e9e44' },
+    { name: 'Godis',  item: 'godis',  color: '#d81b60' },
+  ];
+  const AISLE_X = [];
+  for (let x = 1; x < COLS - 1; x++) if (!SHELF_X.includes(x)) AISLE_X.push(x);
+  const WALK_ROWS = [1, 2, 11, 12];
+
+  const cv = document.getElementById('c');
+  cv.width = COLS * T; cv.height = ROWS * T;
+  const ctx = cv.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  const $ = id => document.getElementById(id);
+
+  // ---------- Highscore ----------
+  let highscore = 0;
+  try { highscore = parseInt(localStorage.getItem('fajr_highscore') || '0', 10) || 0; } catch (e) {}
+  function saveHighscore() { try { localStorage.setItem('fajr_highscore', String(highscore)); } catch (e) {} }
+
+  // ---------- Hjälpfunktioner ----------
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const rndInt = (a, b) => Math.floor(rnd(a, b + 1));
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+  const isWall = (x, y) => x <= 0 || y <= 0 || x >= COLS - 1 || y >= ROWS - 1;
+  const shelfIdx = (x, y) => (y < SHELF_TOP || y > SHELF_BOT) ? -1 : SHELF_X.indexOf(x);
+  const walkable = (x, y) => !isWall(x, y) && shelfIdx(x, y) < 0;
+
+  // ---------- Speltillstånd ----------
+  let state = 'start';
+  let player, people, item, carrying, target, score, streak, bestStreak, delivered, timeLeft, popups, hitTimer, clock;
+
+  function reset() {
+    player = { x: 10, y: 12, tx: 10, ty: 12, dir: 'up', step: 0 };
+    people = []; popups = [];
+    carrying = null; target = null;
+    score = 0; streak = 0; bestStreak = 0; delivered = 0;
+    timeLeft = GAME_TIME; hitTimer = 0; clock = 0;
+    spawnItem();
+    spawnPerson(); spawnPerson();
+    updateHud();
+  }
+
+  function spawnItem() {
+    const cat = rndInt(0, CATS.length - 1);
+    for (let i = 0; i < 200; i++) {
+      const x = rndInt(1, COLS - 2), y = rndInt(1, ROWS - 2);
+      if (!walkable(x, y)) continue;
+      if (Math.abs(x - player.tx) + Math.abs(y - player.ty) < 6) continue;
+      item = { x, y, cat };
+      return;
+    }
+    item = { x: 1, y: 1, cat };
+  }
+
+  function spawnPerson() {
+    const colors = ['#3949ab', '#8e24aa', '#f4511e', '#00897b', '#6d4c41', '#fbc02d', '#546e7a'];
+    const hair = ['#3e2723', '#212121', '#f9a825', '#8d6e63', '#bdbdbd'];
+    for (let i = 0; i < 50; i++) {
+      let p;
+      const speed = rnd(1.8, 3.0);
+      if (Math.random() < 0.6) {
+        const x = pick(AISLE_X), fromTop = Math.random() < 0.5;
+        p = { x, y: fromTop ? 1 : 12, vx: 0, vy: fromTop ? speed : -speed, min: 1, max: 12, axis: 'y' };
+      } else {
+        const y = pick(WALK_ROWS), fromLeft = Math.random() < 0.5;
+        p = { x: fromLeft ? 1 : 18, y, vx: fromLeft ? speed : -speed, vy: 0, min: 1, max: 18, axis: 'x' };
+      }
+      if (Math.hypot(p.x - player.x, p.y - player.y) < 5) continue;
+      p.shirt = pick(colors); p.hair = pick(hair); p.step = 0;
+      people.push(p);
+      return;
+    }
+  }
+
+  function addPopup(text, x, y, color) {
+    popups.push({ text, x: x * T + T / 2, y: y * T, t: 0, color: color || '#fff' });
+  }
+
+  function multiplier() {
+    if (streak >= 10) return 4;
+    if (streak >= 6) return 3;
+    if (streak >= 3) return 2;
+    return 1;
+  }
+
+  // ---------- Tangenter ----------
+  const DIRS = {
+    ArrowUp: { dx: 0, dy: -1, n: 'up' }, ArrowDown: { dx: 0, dy: 1, n: 'down' },
+    ArrowLeft: { dx: -1, dy: 0, n: 'left' }, ArrowRight: { dx: 1, dy: 0, n: 'right' },
+  };
+  let held = [];
+  window.addEventListener('keydown', e => {
+    if (DIRS[e.key]) {
+      e.preventDefault();
+      if (!held.includes(e.key)) held.push(e.key);
+      if (state === 'start') startGame();
+    } else if (e.key === 'Enter' && state !== 'play') {
+      e.preventDefault(); startGame();
+    }
+  });
+  window.addEventListener('keyup', e => { held = held.filter(k => k !== e.key); });
+  window.addEventListener('blur', () => { held = []; });
+  const heldDir = () => held.length ? DIRS[held[held.length - 1]] : null;
+
+  // ---------- Pilknappar på skärmen (mobil) ----------
+  const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 ||
+                  (window.matchMedia && matchMedia('(pointer: coarse)').matches);
+  if (isTouch) document.body.classList.add('touch');
+  window.addEventListener('touchstart', () => document.body.classList.add('touch'), { once: true, passive: true });
+
+  const dpad = $('dpad');
+  const fingers = new Map(); // pointerId -> tangent som fingret håller
+  function setFinger(id, key) {
+    const old = fingers.get(id);
+    if (old === key) return;
+    if (old) held = held.filter(k => k !== old);
+    if (key) {
+      fingers.set(id, key);
+      held = held.filter(k => k !== key);
+      held.push(key);
+      if (state === 'start') startGame();
+    } else fingers.delete(id);
+    dpad.querySelectorAll('.dbtn').forEach(b =>
+      b.classList.toggle('on', [...fingers.values()].includes(b.dataset.key)));
+  }
+  function keyAt(x, y) {
+    const el = document.elementFromPoint(x, y);
+    return el && el.dataset && el.dataset.key ? el.dataset.key : null;
+  }
+  dpad.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    try { dpad.setPointerCapture(e.pointerId); } catch (err) {}
+    setFinger(e.pointerId, keyAt(e.clientX, e.clientY));
+  });
+  dpad.addEventListener('pointermove', e => {
+    if (fingers.has(e.pointerId) || e.buttons) setFinger(e.pointerId, keyAt(e.clientX, e.clientY));
+  });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
+    dpad.addEventListener(ev, e => setFinger(e.pointerId, null)));
+  dpad.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ---------- Uppdatering ----------
+  function updatePlayer(dt) {
+    const speed = 7; // rutor per sekund
+    if (player.x === player.tx && player.y === player.ty) {
+      checkTile();
+      const d = heldDir();
+      if (d) {
+        player.dir = d.n;
+        const nx = player.tx + d.dx, ny = player.ty + d.dy;
+        if (walkable(nx, ny)) { player.tx = nx; player.ty = ny; }
+      }
+    }
+    const dx = player.tx - player.x, dy = player.ty - player.y;
+    const dist = Math.abs(dx) + Math.abs(dy), m = speed * dt;
+    if (dist > 0) {
+      if (dist <= m) { player.x = player.tx; player.y = player.ty; checkTile(); }
+      else { player.x += Math.sign(dx) * m; player.y += Math.sign(dy) * m; }
+      player.step += dt;
+    }
+  }
+
+  function checkTile() {
+    const px = player.tx, py = player.ty;
+    // Plocka upp
+    if (!carrying && item && item.x === px && item.y === py) {
+      carrying = item.cat;
+      target = { x: SHELF_X[item.cat], y: rndInt(SHELF_TOP, SHELF_BOT) };
+      addPopup('Plockad!', px, py, '#ffffff');
+      item = null;
+    }
+    // Lämna vid hyllan
+    if (carrying !== null && target && Math.abs(target.x - px) + Math.abs(target.y - py) === 1) {
+      streak++; delivered++;
+      bestStreak = Math.max(bestStreak, streak);
+      const mult = multiplier();
+      const pts = 10 * mult;
+      score += pts;
+      addPopup('+' + pts + (mult > 1 ? ' x' + mult : ''), target.x, target.y, '#ffd54a');
+      if (streak % 5 === 0) {
+        timeLeft += 2;
+        addPopup('STREAK ' + streak + '! +2 s', px, py - 1, '#7CFC9A');
+      }
+      carrying = null; target = null;
+      spawnItem();
+    }
+  }
+
+  function updatePeople(dt) {
+    const wanted = 2 + Math.floor((GAME_TIME - timeLeft) / 15);
+    if (people.length < Math.min(wanted, 5) && Math.random() < dt * 0.5) spawnPerson();
+
+    for (const p of people) {
+      p.x += p.vx * dt; p.y += p.vy * dt; p.step += dt;
+      if (p.axis === 'y') {
+        if (p.y < p.min) { p.y = p.min; p.vy *= -1; }
+        if (p.y > p.max) { p.y = p.max; p.vy *= -1; }
+      } else {
+        if (p.x < p.min) { p.x = p.min; p.vx *= -1; }
+        if (p.x > p.max) { p.x = p.max; p.vx *= -1; }
+      }
+      if (hitTimer <= 0 && Math.hypot(p.x - player.x, p.y - player.y) < 0.75) {
+        hitTimer = 1.2;
+        if (streak > 0) addPopup('AJ! Streak nollställd', player.x, player.y - 1, '#ff6b6b');
+        else addPopup('Oj, förlåt!', player.x, player.y - 1, '#ff6b6b');
+        streak = 0;
+      }
+    }
+  }
+
+  function update(dt) {
+    clock += dt;
+    for (const p of popups) p.t += dt;
+    popups = popups.filter(p => p.t < 1.2);
+    if (state !== 'play') return;
+
+    timeLeft -= dt;
+    if (hitTimer > 0) hitTimer -= dt;
+    updatePlayer(dt);
+    updatePeople(dt);
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+    updateHud();
+  }
+
+  // ---------- Rita ----------
+  function rect(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), w, h); }
+
+  function drawFloor() {
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+      const px = x * T, py = y * T;
+      rect(px, py, T, T, (x + y) % 2 ? '#a3a3a3' : '#adadad');
+      rect(px, py, T, 1, '#8f8f8f'); rect(px, py, 1, T, '#8f8f8f');
+      if ((x * 7 + y * 13) % 5 === 0) rect(px + 5, py + 9, 1, 1, '#999');
+      if ((x * 3 + y * 11) % 7 === 0) rect(px + 11, py + 4, 1, 1, '#b8b8b8');
+    }
+  }
+
+  function drawWalls() {
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) {
+      if (!isWall(x, y)) continue;
+      const px = x * T, py = y * T;
+      rect(px, py, T, T, '#00563a');
+      rect(px + 1, py + 1, T - 2, T - 2, '#00a142');
+      rect(px + 1, py + 1, T - 2, 3, '#3fcf7a');
+      rect(px + 3, py + 7, 4, 3, '#e8f5e9');
+      rect(px + 9, py + 7, 4, 3, '#ffd54a');
+    }
+    // Entré i botten
+    for (const x of [9, 10]) {
+      const px = x * T, py = (ROWS - 1) * T;
+      rect(px, py, T, T, '#7a7a7a');
+      rect(px + 1, py + 2, T - 2, T - 3, '#9fd8f5');
+      rect(px + (x === 9 ? T - 2 : 0), py + 2, 2, T - 3, '#e0e0e0');
+    }
+  }
+
+  function drawShelves() {
+    SHELF_X.forEach((sx, i) => {
+      const cat = CATS[i];
+      for (let y = SHELF_TOP; y <= SHELF_BOT; y++) {
+        const px = sx * T, py = y * T;
+        rect(px, py, T, T, '#5d4037');
+        rect(px + 1, py, T - 2, T, '#f0f0f0');
+        rect(px + 7, py, 2, T, '#bdbdbd');
+        // varor på hyllan
+        for (let k = 0; k < 2; k++) {
+          const oy = py + 2 + k * 7;
+          rect(px + 2, oy, 4, 4, cat.color);
+          rect(px + 10, oy + ((y + k) % 2) * 2, 4, 4, cat.color);
+          rect(px + 2, oy, 4, 1, 'rgba(255,255,255,.5)');
+          rect(px + 10, oy + ((y + k) % 2) * 2, 4, 1, 'rgba(255,255,255,.5)');
+        }
+      }
+      // Skylt ovanför hyllan
+      const px = sx * T, py = (SHELF_TOP - 1) * T;
+      rect(px - 2, py + 6, T + 4, 9, '#00563a');
+      rect(px - 1, py + 7, T + 2, 7, cat.color);
+      drawItem(cat.item, px + T / 2, py + 10, 0.6);
+    });
+  }
+
+  function drawTarget() {
+    if (!target) return;
+    const on = Math.floor(clock * 6) % 2 === 0;
+    const px = target.x * T, py = target.y * T;
+    ctx.strokeStyle = on ? '#ffeb3b' : '#ff9800';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 1, py + 1, T - 2, T - 2);
+    // pil på båda sidor
+    const bob = Math.floor(clock * 4) % 2;
+    ctx.fillStyle = '#ffeb3b';
+    [[-1, 1], [1, -1]].forEach(([side, dir]) => {
+      const ax = px + (side < 0 ? -6 - bob : T + 2 + bob), ay = py + T / 2;
+      for (let i = 0; i < 4; i++) ctx.fillRect(ax + (dir > 0 ? i : 3 - i), ay - (3 - i), 1, (3 - i) * 2 + 1);
+    });
+  }
+
+  function drawItem(type, cx, cy, s) {
+    s = s || 1;
+    const p = (x, y, w, h, c) => rect(cx + x * s, cy + y * s, Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), c);
+    switch (type) {
+      case 'mjölk':
+        p(-3, -5, 6, 10, '#ffffff'); p(-3, -7, 6, 2, '#3d8bfd'); p(-1, -8, 2, 1, '#ffffff');
+        p(-3, -1, 6, 3, '#3d8bfd'); p(3, -5, 1, 10, '#cfd8dc'); break;
+      case 'bröd':
+        p(-5, -3, 10, 7, '#a0612a'); p(-4, -4, 8, 1, '#c8843c'); p(-4, -3, 8, 2, '#d99a52');
+        p(-3, -1, 1, 3, '#7a4519'); p(0, -1, 1, 3, '#7a4519'); p(3, -1, 1, 3, '#7a4519'); break;
+      case 'äpple':
+        p(-4, -3, 8, 7, '#e53935'); p(-3, -4, 6, 9, '#e53935'); p(-2, -2, 2, 2, '#ff8a80');
+        p(0, -6, 1, 2, '#5d4037'); p(1, -6, 3, 2, '#43a047'); break;
+      case 'gurka':
+        p(-6, -2, 12, 4, '#2e7d32'); p(-5, -3, 10, 1, '#43a047'); p(-4, -1, 1, 1, '#a5d6a7');
+        p(0, 0, 1, 1, '#a5d6a7'); p(3, -1, 1, 1, '#a5d6a7'); break;
+      case 'godis':
+        p(-3, -3, 6, 6, '#d81b60'); p(-6, -2, 3, 4, '#f48fb1'); p(3, -2, 3, 4, '#f48fb1');
+        p(-2, -2, 2, 1, '#ffffff'); p(0, 0, 2, 2, '#ffeb3b'); break;
+    }
+  }
+
+  function drawFloorItem() {
+    if (!item) return;
+    const bob = Math.round(Math.sin(clock * 6) * 1.5);
+    const cx = item.x * T + T / 2, cy = item.y * T + T / 2;
+    // glow-ring
+    const r = 7 + (Math.floor(clock * 5) % 2);
+    ctx.fillStyle = 'rgba(255,235,59,0.35)';
+    ctx.fillRect(cx - r, cy - r + 2, r * 2, r * 2 - 2);
+    rect(cx - 4, cy + 5, 8, 2, 'rgba(0,0,0,.25)');
+    drawItem(CATS[item.cat].item, cx, cy + bob, 1);
+  }
+
+  function drawPerson(x, y, dir, shirt, capOrHair, isPlayer, step) {
+    const px = Math.round(x * T), py = Math.round(y * T);
+    const walk = Math.floor(step * 10) % 2;
+    rect(px + 3, py + 13, 10, 2, 'rgba(0,0,0,.25)');           // skugga
+    // ben
+    if (dir === 'left' || dir === 'right') {
+      rect(px + 5 + walk * 2, py + 11, 2, 3, '#263238');
+      rect(px + 9 - walk * 2, py + 11, 2, 3, '#263238');
+    } else {
+      rect(px + 5, py + 11 + walk, 2, 3 - walk, '#263238');
+      rect(px + 9, py + 12 - walk, 2, 2 + walk, '#263238');
+    }
+    // kropp
+    rect(px + 3, py + 6, 10, 6, shirt);
+    rect(px + 3, py + 6, 10, 1, 'rgba(255,255,255,.25)');
+    rect(px + 2, py + 7, 1, 4, '#f1c27d'); rect(px + 13, py + 7, 1, 4, '#f1c27d'); // armar
+    // huvud
+    rect(px + 5, py + 1, 6, 6, '#f1c27d');
+    if (isPlayer) {
+      // grön keps
+      rect(px + 4, py + 0, 8, 4, '#007a33');
+      rect(px + 5, py + 0, 6, 1, '#00a142');
+      const bill = '#004d22';
+      if (dir === 'up')    rect(px + 5, py - 2, 6, 2, bill);
+      if (dir === 'down')  rect(px + 5, py + 4, 6, 2, bill);
+      if (dir === 'left')  rect(px + 2, py + 1, 2, 3, bill);
+      if (dir === 'right') rect(px + 12, py + 1, 2, 3, bill);
+      // namnbricka
+      rect(px + 9, py + 8, 3, 2, '#ffffff');
+    } else {
+      rect(px + 5, py + 1, 6, 3, capOrHair);
+      if (dir === 'down') rect(px + 5, py + 1, 6, 2, capOrHair);
+    }
+    // ögon
+    if (dir === 'down') { rect(px + 6, py + 5, 1, 1, '#000'); rect(px + 9, py + 5, 1, 1, '#000'); }
+    if (dir === 'left') rect(px + 5, py + 4, 1, 1, '#000');
+    if (dir === 'right') rect(px + 10, py + 4, 1, 1, '#000');
+  }
+
+  function drawPeople() {
+    for (const p of people) {
+      const dir = p.axis === 'y' ? (p.vy > 0 ? 'down' : 'up') : (p.vx > 0 ? 'right' : 'left');
+      drawPerson(p.x, p.y, dir, p.shirt, p.hair, false, p.step);
+    }
+  }
+
+  function drawPlayer() {
+    if (hitTimer > 0 && Math.floor(clock * 12) % 2 === 0) return; // blinkar efter krock
+    drawPerson(player.x, player.y, player.dir, '#00a142', null, true, player.step);
+    if (carrying !== null) {
+      const cx = player.x * T + T / 2, cy = player.y * T - 6;
+      drawItem(CATS[carrying].item, cx, cy, 0.8);
+    }
+  }
+
+  function drawPopups() {
+    ctx.font = 'bold 8px monospace';
+    ctx.textAlign = 'center';
+    for (const p of popups) {
+      const y = p.y - p.t * 14;
+      ctx.globalAlpha = Math.max(0, 1 - p.t / 1.2);
+      ctx.fillStyle = '#000';
+      for (const [ox, oy] of [[-1,0],[1,0],[0,-1],[0,1]]) ctx.fillText(p.text, p.x + ox, y + oy);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, y);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function draw() {
+    drawFloor();
+    drawWalls();
+    drawShelves();
+    drawTarget();
+    drawFloorItem();
+    // rita i höjdordning så de som står längre ner hamnar framför
+    const actors = people.map(p => ({ y: p.y, f: () => null, p }));
+    actors.push({ y: player.y, me: true });
+    actors.sort((a, b) => a.y - b.y);
+    for (const a of actors) {
+      if (a.me) drawPlayer();
+      else {
+        const p = a.p;
+        const dir = p.axis === 'y' ? (p.vy > 0 ? 'down' : 'up') : (p.vx > 0 ? 'right' : 'left');
+        drawPerson(p.x, p.y, dir, p.shirt, p.hair, false, p.step);
+      }
+    }
+    drawPopups();
+  }
+
+  // ---------- HUD ----------
+  function updateHud() {
+    $('score').textContent = score;
+    $('time').textContent = Math.ceil(timeLeft);
+    $('timerBox').classList.toggle('low', timeLeft <= 10 && state === 'play');
+    $('streak').textContent = streak;
+    $('mult').textContent = 'x' + multiplier();
+    $('hs').textContent = highscore;
+    $('carry').textContent = carrying !== null
+      ? 'Fajr bär: ' + CATS[carrying].item + ' → lämna vid ' + CATS[carrying].name + '-hyllan'
+      : (state === 'play' ? 'Hämta varan som glittrar i gången!' : '');
+  }
+
+  // ---------- Start / slut ----------
+  function startGame() {
+    reset();
+    held = held.filter(k => DIRS[k]);
+    state = 'play';
+    $('startScreen').classList.add('hidden');
+    $('overScreen').classList.add('hidden');
+  }
+
+  function endGame() {
+    state = 'over';
+    const isNew = score > highscore;
+    if (isNew) { highscore = score; saveHighscore(); }
+    $('finalScore').textContent = score;
+    $('newHs').style.display = isNew ? 'block' : 'none';
+    $('overInfo').innerHTML = 'Levererade varor: <b>' + delivered + '</b> · Längsta streak: <b>' + bestStreak +
+      '</b><br>Highscore: <b>' + highscore + '</b>';
+    $('overScreen').classList.remove('hidden');
+    updateHud();
+  }
+
+  $('startBtn').addEventListener('click', startGame);
+  $('againBtn').addEventListener('click', startGame);
+  $('restartBtn').addEventListener('click', e => { e.currentTarget.blur(); startGame(); });
+
+  // ---------- Spel-loop ----------
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  reset();
+  updateHud();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
